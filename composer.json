@@ -1,0 +1,42 @@
+{
+    "name": "crabphp/openapi",
+    "description": "OpenAPI documents generated from Crab routes and action signatures",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "crabphp/framework": "@dev",
+        "psr/http-message": "^2.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^13.4.4",
+        "carthage-software/mago": "1.57.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Crab\\OpenApi\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Crab\\OpenApi\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "@php vendor/bin/phpunit",
+        "format": "@php vendor/bin/mago fmt",
+        "format:check": "@php vendor/bin/mago fmt --check",
+        "lint": "@php vendor/bin/mago lint"
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../framework",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

@@ -1,0 +1,39 @@
+#:schema https://mago.carthage.software/1.57.0/schema.json
+version = "1"
+php-version = "8.4.0"
+
+[source]
+workspace = "."
+paths = ["src/", "tests/"]
+excludes = ["vendor/**"]
+
+[formatter]
+print-width = 120
+
+[linter]
+integrations = ["phpunit"]
+
+[linter.rules]
+# The generator deliberately keeps OpenAPI inference in one readable traversal;
+# the metric thresholds count each schema branch as separate control flow.
+cyclomatic-complexity = { enabled = false }
+halstead = { enabled = false }
+kan-defect = { enabled = false }
+too-many-methods = { enabled = false }
+# Public schema methods need a flag to distinguish a nullable value from a
+# separate 204 response; replacing it with another method would duplicate them.
+no-boolean-flag-parameter = { enabled = false }
+# Named arguments around PHP's built-in predicates would make the schema code
+# denser without changing any public Crab signature.
+literal-named-argument = { enabled = false }
+# The command removes a best-effort temporary file after a failed rename.
+no-error-control-operator = { enabled = false }
+# isset() is the intended check for optional schema keys, where null is absent.
+no-isset = { enabled = false }
+# Schema arrays use explicit truthy checks to retain falsy defaults.
+no-shorthand-ternary = { enabled = false }
+# Assertions consistently use PHPUnit's documented self:: style.
+assertion-style = { enabled = false }
+# Guard clauses do not always clarify one schema-building pass that mirrors
+# OpenAPI's own object hierarchy.
+no-else-clause = { enabled = false }
