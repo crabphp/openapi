@@ -37,6 +37,10 @@ final readonly class Generate implements Command
 
     public function handle(Input $input, Output $output): int
     {
+        if ($input->option('output') === true || $input->option('output') === '') {
+            $output->error('The --output option needs a value, such as --output=openapi.json.');
+            return 1;
+        }
         if ($input->flag('strict') && $input->flag('no-strict')) {
             $output->error('Use --strict or --no-strict, not both.');
             return 1;

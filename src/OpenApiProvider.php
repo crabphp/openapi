@@ -8,6 +8,7 @@ use Crab\Contracts\Config\Config;
 use Crab\Contracts\Console\Console;
 use Crab\Contracts\Container\Container;
 use Crab\Contracts\Http\ErrorRenderer;
+use Crab\Contracts\Http\MiddlewareStack;
 use Crab\Contracts\Provider;
 use Crab\Contracts\Routing\Router;
 use Crab\OpenApi\Commands\Generate;
@@ -45,9 +46,19 @@ final class OpenApiProvider implements Provider
                 'exclude' => ['type' => 'array', 'items' => ['type' => 'string', 'minLength' => 1]],
                 'servers' => [
                     'type' => 'array',
-                    'items' => ['type' => ['string', 'object']],
+                    'items' => [
+                        'type' => ['string', 'object'],
+                        'properties' => [
+                            'url' => ['type' => 'string', 'minLength' => 1],
+                            'description' => ['type' => 'string'],
+                            'variables' => ['type' => 'object'],
+                        ],
+                    ],
                 ],
-                'security' => ['type' => 'object'],
+                'security' => [
+                    'type' => 'object',
+                    'additionalProperties' => ['type' => 'object'],
+                ],
                 'middleware' => [
                     'type' => 'object',
                     'additionalProperties' => [
@@ -62,20 +73,22 @@ final class OpenApiProvider implements Provider
                                 'items' => ['type' => 'integer', 'minimum' => 100, 'maximum' => 599],
                             ],
                         ],
+                        'additionalProperties' => false,
                     ],
                 ],
                 'error_schema' => ['type' => ['array', 'object', 'null']],
             ],
         );
 
-        $container->singleton(
-            DocumentBuilder::class,
-            static fn(Container $container): DocumentBuilder => new DocumentBuilder(
+        $container->singleton(DocumentBuilder::class, static function (Container $container): DocumentBuilder {
+            $middleware = $container->has(MiddlewareStack::class) ? $container->get(MiddlewareStack::class) : null;
+            return new DocumentBuilder(
                 $container->get(Router::class),
                 $container->get(Config::class),
                 $container->has(ErrorRenderer::class),
-            ),
-        );
+                $middleware instanceof MiddlewareStack ? $middleware->layers() : [],
+            );
+        });
 
         if ($container->has(Console::class)) {
             $container->get(Console::class)->add('openapi:generate', Generate::class);

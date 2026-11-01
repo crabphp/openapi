@@ -123,6 +123,21 @@ final class GenerateTest extends TestCase
         self::assertFileExists($absolute);
     }
 
+    public function testOutputNeedsAnExplicitValue(): void
+    {
+        [$output, $out, $error] = self::outputStreams();
+
+        self::assertSame(1, $this->command()->handle(new Input(['--output']), $output));
+        self::assertSame('', self::contents($out));
+        self::assertStringContainsString('needs a value', self::contents($error));
+        self::assertFileDoesNotExist($this->directory . '/openapi.json');
+
+        [$empty, $emptyOut, $emptyError] = self::outputStreams();
+        self::assertSame(1, $this->command()->handle(new Input(['--output=']), $empty));
+        self::assertSame('', self::contents($emptyOut));
+        self::assertStringContainsString('needs a value', self::contents($emptyError));
+    }
+
     private function command(): Generate
     {
         $router = new Router();

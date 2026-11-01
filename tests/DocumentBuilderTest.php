@@ -11,17 +11,21 @@ use Crab\OpenApi\Attributes\Response;
 use Crab\OpenApi\Attributes\Security;
 use Crab\OpenApi\DocumentBuilder;
 use Crab\OpenApi\GenerationException;
+use Crab\OpenApi\Tests\Fixtures\ApiKeyAuth;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\OpenApi\Tests\Fixtures\CreateThingAction;
 use Crab\OpenApi\Tests\Fixtures\HiddenAction;
 use Crab\OpenApi\Tests\Fixtures\ListThingsAction;
+use Crab\OpenApi\Tests\Fixtures\NullableInput;
 use Crab\OpenApi\Tests\Fixtures\NullableKindView;
 use Crab\OpenApi\Tests\Fixtures\OperationDefaultsAction;
 use Crab\OpenApi\Tests\Fixtures\OptionalBody;
 use Crab\OpenApi\Tests\Fixtures\OptionalUser;
 use Crab\OpenApi\Tests\Fixtures\RecursiveNode;
 use Crab\OpenApi\Tests\Fixtures\SecurityAction;
+use Crab\OpenApi\Tests\Fixtures\SharedThing;
 use Crab\OpenApi\Tests\Fixtures\Thing;
+use Crab\OpenApi\Tests\Fixtures\UninitializedView;
 use Crab\OpenApi\Tests\Fixtures\UploadThing;
 use Crab\Routing\FromQuery;
 use Crab\Routing\Router;
@@ -263,6 +267,18 @@ final class DocumentBuilderTest extends TestCase
         );
     }
 
+    public function testNullableBackedEnumInputComponentsIncludeNullInTheirEnum(): void
+    {
+        $router = new Router();
+        $router->post('/nullable-input', static fn(NullableInput $input): string => 'ok');
+
+        $document = $this->document($router);
+        $schema = $document['components']['schemas']['Crab.OpenApi.Tests.Fixtures.Kind'];
+
+        self::assertSame(['string', 'null'], $schema['type']);
+        self::assertSame(['simple', 'special', null], $schema['enum']);
+    }
+
     public function testTrueAndFalseReturnTypesAreInferredAsBooleans(): void
     {
         $router = new Router();
@@ -339,6 +355,118 @@ final class DocumentBuilderTest extends TestCase
         self::assertSame([BearerAuth::class], $route->middleware);
     }
 
+    public function testStackedMappedMiddlewareRequiresAllSecuritySchemes(): void
+    {
+        $router = new Router();
+        $router->get('/secured', static fn(): string => 'ok')->middleware(new BearerAuth(), new ApiKeyAuth());
+
+        $operation = $this->document($router, [
+            'security' => [
+                'bearer' => ['type' => 'http', 'scheme' => 'bearer'],
+                'apiKey' => ['type' => 'apiKey', 'in' => 'header', 'name' => 'X-Key'],
+            ],
+            'middleware' => [
+                BearerAuth::class => ['security' => 'bearer'],
+                ApiKeyAuth::class => ['security' => 'apiKey'],
+            ],
+        ])['paths']['/secured']['get'];
+
+        self::assertSame([['bearer' => [], 'apiKey' => []]], $operation['security']);
+    }
+
+    public function testGlobalMappedMiddlewareEffectsApplyToEveryOperation(): void
+    {
+        $router = new Router();
+        $router->get('/global', static fn(): string => 'ok');
+
+        $operation = $this->builder(
+            $router,
+            [
+                'security' => ['bearer' => ['type' => 'http', 'scheme' => 'bearer']],
+                'middleware' => [BearerAuth::class => ['security' => 'bearer', 'responses' => [429]]],
+            ],
+            [BearerAuth::class],
+        )->build(false)->document['paths']['/global']['get'];
+
+        self::assertSame([['bearer' => []]], $operation['security']);
+        self::assertArrayHasKey('401', $operation['responses']);
+        self::assertArrayHasKey('429', $operation['responses']);
+    }
+
+    public function testRequestAndResponseComponentsDoNotDependOnRouteOrder(): void
+    {
+        $makeRouter = static function (bool $responseFirst): Router {
+            $router = new Router();
+            if ($responseFirst) {
+                $router->get('/output', static fn(): SharedThing => throw new \LogicException());
+                $router->post('/input', static fn(SharedThing $thing): string => 'ok');
+            } else {
+                $router->post('/input', static fn(SharedThing $thing): string => 'ok');
+                $router->get('/output', static fn(): SharedThing => throw new \LogicException());
+            }
+            return $router;
+        };
+
+        $first = $this->document($makeRouter(true));
+        $second = $this->document($makeRouter(false));
+        $inputRef = ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.SharedThing.Input'];
+        $outputRef = ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.SharedThing.Output'];
+
+        self::assertSame(
+            $inputRef,
+            $first['paths']['/input']['post']['requestBody']['content']['application/json']['schema'],
+        );
+        self::assertSame(
+            $outputRef,
+            $first['paths']['/output']['get']['responses']['200']['content']['application/json']['schema'],
+        );
+        self::assertSame(
+            $inputRef,
+            $second['paths']['/input']['post']['requestBody']['content']['application/json']['schema'],
+        );
+        self::assertSame(
+            $outputRef,
+            $second['paths']['/output']['get']['responses']['200']['content']['application/json']['schema'],
+        );
+        self::assertSame(
+            2,
+            $first['components']['schemas']['Crab.OpenApi.Tests.Fixtures.SharedThing.Input']['properties']['name']['minLength'],
+        );
+        self::assertArrayNotHasKey(
+            'minLength',
+            $first['components']['schemas']['Crab.OpenApi.Tests.Fixtures.SharedThing.Output']['properties']['name'],
+        );
+    }
+
+    public function testUninitializedPublicPropertiesAreNotMarkedRequired(): void
+    {
+        $router = new Router();
+        $router->get('/view', static fn(): UninitializedView => throw new \LogicException());
+
+        $schema = $this->document($router)['components']['schemas']['Crab.OpenApi.Tests.Fixtures.UninitializedView'];
+
+        self::assertSame(['note'], $schema['required']);
+    }
+
+    public function testBodiesOnNoContentStatusesFailStrictGeneration(): void
+    {
+        $router = new Router();
+        $router->get('/no-content', #[Response(204, body: Thing::class)] static fn(): string => 'ok');
+        $router->get('/not-modified', #[Response(304, body: Thing::class)] static fn(): string => 'ok');
+
+        $builder = $this->builder($router);
+        try {
+            $builder->build();
+            self::fail('Strict generation accepted a body on a no-content response.');
+        } catch (GenerationException $error) {
+            self::assertStringContainsString('must not have response content', $error->getMessage());
+        }
+
+        $document = $builder->build(false)->document;
+        self::assertArrayNotHasKey('content', $document['paths']['/no-content']['get']['responses']['204']);
+        self::assertArrayNotHasKey('content', $document['paths']['/not-modified']['get']['responses']['304']);
+    }
+
     public function testUndefinedSecuritySchemesFailStrictGeneration(): void
     {
         $router = new Router();
@@ -347,6 +475,27 @@ final class DocumentBuilderTest extends TestCase
         $this->expectException(GenerationException::class);
         $this->expectExceptionMessage('openapi.security does not define it');
         $this->builder($router)->build();
+    }
+
+    public function testMalformedSecurityServersAndMiddlewareConfigurationFailsStrictGeneration(): void
+    {
+        $router = new Router();
+        $router->get('/configured', static fn(): string => 'ok');
+
+        $builder = $this->builder($router, [
+            'security' => ['broken' => ['type' => 'unknown']],
+            'servers' => [['description' => 'missing url']],
+            'middleware' => [BearerAuth::class => ['responses' => [700], 'unexpected' => true]],
+        ]);
+
+        try {
+            $builder->build();
+            self::fail('Strict generation accepted malformed OpenAPI configuration.');
+        } catch (GenerationException $error) {
+            self::assertStringContainsString('openapi.security.broken.type', $error->getMessage());
+            self::assertStringContainsString('openapi.servers.0', $error->getMessage());
+            self::assertStringContainsString('openapi.middleware', $error->getMessage());
+        }
     }
 
     public function testRecursiveClassesBecomeReferencesAndAreRegisteredOnce(): void
@@ -487,11 +636,15 @@ final class DocumentBuilderTest extends TestCase
         return $this->builder($router, $openapi)->build()->document;
     }
 
-    private function builder(Router $router, array $openapi = []): DocumentBuilder
+    private function builder(Router $router, array $openapi = [], array $globalMiddleware = []): DocumentBuilder
     {
-        return new DocumentBuilder($router, new Config([
-            'app' => ['name' => 'Test API'],
-            'openapi' => ['strict' => true, ...$openapi],
-        ]));
+        return new DocumentBuilder(
+            $router,
+            new Config([
+                'app' => ['name' => 'Test API'],
+                'openapi' => ['strict' => true, ...$openapi],
+            ]),
+            globalMiddleware: $globalMiddleware,
+        );
     }
 }

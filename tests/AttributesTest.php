@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Crab\OpenApi\Tests;
 
+use Crab\OpenApi\Attributes\Operation;
 use Crab\OpenApi\Attributes\Response;
 use Crab\OpenApi\Attributes\Security;
 use PHPUnit\Framework\TestCase;
@@ -19,9 +20,24 @@ final class AttributesTest extends TestCase
         new Security();
     }
 
-    public function testResponseRefusesAnImpossibleStatusOrEmptyContentType(): void
+    public function testResponseRefusesAnImpossibleStatusOrInvalidContentType(): void
+    {
+        $caught = false;
+        try {
+            new Response(status: 99);
+            self::fail('An impossible status was accepted.');
+        } catch (\InvalidArgumentException) {
+            $caught = true;
+        }
+        self::assertTrue($caught);
+
+        $this->expectException(\InvalidArgumentException::class);
+        new Response(contentType: 'plain text');
+    }
+
+    public function testOperationRefusesMalformedTags(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        new Response(status: 99);
+        new Operation(tags: ['things', 123]);
     }
 }

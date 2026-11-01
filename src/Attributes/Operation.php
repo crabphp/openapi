@@ -16,5 +16,12 @@ final readonly class Operation
         public array $tags = [],
         public ?string $operationId = null,
         public bool $deprecated = false,
-    ) {}
+    ) {
+        if (
+            !array_is_list($tags)
+            || array_filter($tags, static fn(mixed $tag): bool => !is_string($tag) || trim($tag) === '')
+        ) {
+            throw new \InvalidArgumentException('Operation tags must be a list of non-empty strings.');
+        }
+    }
 }

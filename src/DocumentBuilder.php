@@ -21,6 +21,7 @@ use Psr\Http\Message\ResponseInterface;
 final class DocumentBuilder
 {
     private const METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
+    private const NO_CONTENT_STATUSES = [204, 304, 205];
 
     private SchemaRegistry $schemas;
     private TypeSchema $types;
@@ -37,12 +38,28 @@ final class DocumentBuilder
      * @var array<string, true>
      */
     private array $operationIds = [];
+    /**
+     * @var list<string>
+     */
+    private array $globalMiddleware;
+    /**
+     * @var array<string, array{security: list<string>, responses: list<int>}>
+     */
+    private array $middlewareEffects = [];
+    private bool $securityValidated = false;
+    /**
+     * @var array<string, array<string, mixed>>
+     */
+    private array $validatedSecuritySchemes = [];
 
     public function __construct(
         private readonly Router $router,
         private readonly Config $config,
         private readonly bool $customErrorRenderer = false,
-    ) {}
+        array $globalMiddleware = [],
+    ) {
+        $this->globalMiddleware = array_values(array_filter($globalMiddleware, is_string(...)));
+    }
 
     public function build(?bool $strict = null): BuildResult
     {
@@ -50,13 +67,19 @@ final class DocumentBuilder
         $this->warnings = [];
         $this->fatal = [];
         $this->operationIds = [];
+        $this->middlewareEffects = [];
+        $this->securityValidated = false;
+        $this->validatedSecuritySchemes = [];
         $this->schemas = new SchemaRegistry();
         $this->types = new TypeSchema($this->schemas, function (string $warning): void {
             $this->failOrWarn($warning);
         });
 
+        $this->schemas->splitClasses($this->schemaSplitClasses($this->router->routes()));
+
         $this->schemas->add('Error', $this->errorSchema());
         $securitySchemes = $this->securitySchemes();
+        $this->middlewareEffects = $this->configuredMiddleware();
 
         $paths = [];
         $pathMethods = [];
@@ -275,7 +298,11 @@ final class DocumentBuilder
                     ? $response->description
                     : self::reason($response->status),
             ];
-            if ($response->body !== null && $response->status !== 204) {
+            if ($response->body !== null && in_array($response->status, self::NO_CONTENT_STATUSES, true)) {
+                $this->failOrWarn(
+                    "{$where} declares a body for HTTP {$response->status}, which must not have response content.",
+                );
+            } elseif ($response->body !== null) {
                 $schema = $this->bodySchema($response->body, $where);
                 $written['content'] = [$response->contentType => ['schema' => $schema]];
                 if ($schema instanceof \stdClass) {
@@ -286,7 +313,7 @@ final class DocumentBuilder
                 // error response, including the text/plain negotiation.
                 $written = $this->errorResponse($written['description']);
             }
-            $headers = $this->headers($response->headers);
+            $headers = $this->headers($response->headers, $where);
             if ($headers !== []) {
                 $written['headers'] = $headers;
             }
@@ -396,22 +423,31 @@ final class DocumentBuilder
             );
             return new \stdClass();
         }
-        return $this->schemas->normalize($body);
+        return $this->schemas->normalize($body, 'output');
     }
 
     /**
      * @param array<int|string, mixed> $headers
      * @return array<string, array<string, mixed>>
      */
-    private function headers(array $headers): array
+    private function headers(array $headers, string $where): array
     {
         $result = [];
         foreach ($headers as $name => $header) {
             if (is_int($name) && is_string($header)) {
+                if (trim($header) === '') {
+                    $this->failOrWarn("{$where} declares an empty response header name.");
+                    continue;
+                }
                 $result[$header] = ['schema' => ['type' => 'string']];
                 continue;
             }
             if (!is_string($name)) {
+                $this->failOrWarn("{$where} declares a response header with a non-string name.");
+                continue;
+            }
+            if (trim($name) === '') {
+                $this->failOrWarn("{$where} declares an empty response header name.");
                 continue;
             }
             if (is_string($header)) {
@@ -422,7 +458,9 @@ final class DocumentBuilder
                 $result[$name] = ['schema' => ['type' => 'string']];
                 continue;
             }
-            $result[$name] = isset($header['schema']) ? $header : ['schema' => $this->schemas->normalize($header)];
+            $result[$name] = isset($header['schema'])
+                ? $header
+                : ['schema' => $this->schemas->normalize($header, 'output')];
         }
         return $result;
     }
@@ -449,17 +487,13 @@ final class DocumentBuilder
             $responses['401'] = $this->errorResponse('Authentication is required.');
         }
 
-        $middleware = $this->config->get('openapi.middleware', []);
-        if (!is_array($middleware)) {
-            return;
-        }
-        foreach ($route->middleware as $class) {
-            $effect = $middleware[$class] ?? null;
-            if (!is_array($effect) || !isset($effect['responses']) || !is_array($effect['responses'])) {
+        foreach ($this->allMiddleware($route) as $class) {
+            $effect = $this->middlewareEffects[$class] ?? null;
+            if ($effect === null) {
                 continue;
             }
             foreach ($effect['responses'] as $status) {
-                if (!is_int($status)) {
+                if ($status < 100 || $status > 599) {
                     continue;
                 }
                 if (!isset($responses[(string) $status])) {
@@ -508,27 +542,21 @@ final class DocumentBuilder
             return $security;
         }
 
-        $mapped = $this->config->get('openapi.middleware', []);
-        if (!is_array($mapped)) {
-            return [];
-        }
-        foreach ($route->middleware as $class) {
-            $effect = $mapped[$class] ?? null;
-            if (!is_array($effect) || !isset($effect['security'])) {
+        $requirement = [];
+        foreach ($this->allMiddleware($route) as $class) {
+            $effect = $this->middlewareEffects[$class] ?? null;
+            if ($effect === null) {
                 continue;
             }
-            $schemes = is_array($effect['security']) ? $effect['security'] : [$effect['security']];
-            $requirement = [];
-            foreach ($schemes as $scheme) {
-                if (!is_string($scheme) || $scheme === '') {
-                    continue;
-                }
+            foreach ($effect['security'] as $scheme) {
                 $requirement[$scheme] = [];
             }
-            if ($requirement !== []) {
-                $this->checkSecuritySchemes($requirement, $route, $configured);
-                $security[] = $requirement;
-            }
+        }
+        if ($requirement !== []) {
+            $this->checkSecuritySchemes($requirement, $route, $configured);
+            // Middleware is stacked, so every mapped scheme is required. A
+            // repeated #[Security] attribute remains an explicit alternative.
+            $security[] = $requirement;
         }
         return $security;
     }
@@ -555,8 +583,12 @@ final class DocumentBuilder
     private function errorSchema(): array|\stdClass
     {
         $configured = $this->config->get('openapi.error_schema');
-        if (is_array($configured)) {
-            return $this->schemas->normalize($configured);
+        if ($configured !== null) {
+            if (!is_array($configured) || array_is_list($configured)) {
+                $this->failOrWarn('openapi.error_schema must be a JSON Schema object.');
+            } else {
+                return $this->schemas->normalize($configured, 'output');
+            }
         }
         if ($this->customErrorRenderer) {
             $this->failOrWarn(
@@ -571,18 +603,234 @@ final class DocumentBuilder
      */
     private function securitySchemes(): array
     {
+        if ($this->securityValidated) {
+            return $this->validatedSecuritySchemes;
+        }
+        $this->securityValidated = true;
         $configured = $this->config->get('openapi.security', []);
-        if (!is_array($configured)) {
+        if (!is_array($configured) || $configured !== [] && array_is_list($configured)) {
+            $this->failOrWarn('openapi.security must be a map of scheme names to OpenAPI security scheme objects.');
             return [];
         }
         $schemes = [];
         foreach ($configured as $name => $scheme) {
-            if (!is_string($name) || !is_array($scheme)) {
+            if (!is_string($name) || trim($name) === '' || preg_match('/^[A-Za-z0-9._-]+$/', $name) !== 1) {
+                $this->failOrWarn('openapi.security scheme names must be non-empty strings.');
+                continue;
+            }
+            if (!is_array($scheme) || array_is_list($scheme)) {
+                $this->failOrWarn("openapi.security.{$name} must be an object.");
+                continue;
+            }
+            if (!$this->validSecurityScheme($name, $scheme)) {
                 continue;
             }
             $schemes[$name] = $scheme;
         }
-        return $schemes;
+        return $this->validatedSecuritySchemes = $schemes;
+    }
+
+    /**
+     * @return array<string, array{security: list<string>, responses: list<int>}>
+     */
+    private function configuredMiddleware(): array
+    {
+        $configured = $this->config->get('openapi.middleware', []);
+        if (!is_array($configured) || $configured !== [] && array_is_list($configured)) {
+            $this->failOrWarn('openapi.middleware must be a map of middleware classes to effects.');
+            return [];
+        }
+        $effects = [];
+        foreach ($configured as $class => $effect) {
+            if (!is_string($class) || trim($class) === '') {
+                $this->failOrWarn('openapi.middleware keys must be non-empty middleware class names.');
+                continue;
+            }
+            if (!is_array($effect) || array_is_list($effect)) {
+                $this->failOrWarn("openapi.middleware.{$class} must be an object.");
+                continue;
+            }
+            $security = $effect['security'] ?? [];
+            if (is_string($security)) {
+                $security = [$security];
+            }
+            if (!is_array($security) || !array_is_list($security)) {
+                $this->failOrWarn("openapi.middleware.{$class}.security must be a name or list of names.");
+                $security = [];
+            }
+            $securityNames = [];
+            foreach ($security as $scheme) {
+                if (!is_string($scheme) || trim($scheme) === '' || preg_match('/\s/', $scheme) === 1) {
+                    $this->failOrWarn("openapi.middleware.{$class}.security must contain only non-empty scheme names.");
+                    continue;
+                }
+                $securityNames[] = $scheme;
+            }
+            $responses = $effect['responses'] ?? [];
+            if (!is_array($responses) || !array_is_list($responses)) {
+                $this->failOrWarn("openapi.middleware.{$class}.responses must be a list of HTTP statuses.");
+                $responses = [];
+            }
+            $statuses = [];
+            foreach ($responses as $status) {
+                if (!is_int($status) || $status < 100 || $status > 599) {
+                    $this->failOrWarn(
+                        "openapi.middleware.{$class}.responses must contain integers between 100 and 599.",
+                    );
+                    continue;
+                }
+                $statuses[] = $status;
+            }
+            $unknown = array_diff(array_keys($effect), ['security', 'responses']);
+            foreach ($unknown as $key) {
+                $this->failOrWarn("openapi.middleware.{$class}.{$key} is not a supported middleware effect.");
+            }
+            $effects[$class] = [
+                'security' => array_values(array_unique($securityNames)),
+                'responses' => array_values(array_unique($statuses)),
+            ];
+        }
+        return $effects;
+    }
+
+    /**
+     * Global middleware is outside RouteInfo by design, so add it to every
+     * operation before applying the route and group middleware.
+     *
+     * @return list<string>
+     */
+    private function allMiddleware(RouteInfo $route): array
+    {
+        return array_values(array_unique([...$this->globalMiddleware, ...$route->middleware]));
+    }
+
+    /**
+     * @param array<string, mixed> $scheme
+     */
+    private function validSecurityScheme(string $name, array $scheme): bool
+    {
+        $type = $scheme['type'] ?? null;
+        if (!is_string($type) || !in_array($type, ['apiKey', 'http', 'mutualTLS', 'oauth2', 'openIdConnect'], true)) {
+            $this->failOrWarn(
+                "openapi.security.{$name}.type must be apiKey, http, mutualTLS, oauth2 or openIdConnect.",
+            );
+            return false;
+        }
+        if (array_key_exists('description', $scheme) && !is_string($scheme['description'])) {
+            $this->failOrWarn("openapi.security.{$name}.description must be a string.");
+            return false;
+        }
+        $allowed = [
+            'apiKey' => ['type', 'description', 'name', 'in'],
+            'http' => ['type', 'description', 'scheme', 'bearerFormat'],
+            'mutualTLS' => ['type', 'description'],
+            'oauth2' => ['type', 'description', 'flows'],
+            'openIdConnect' => ['type', 'description', 'openIdConnectUrl'],
+        ][$type];
+        foreach (array_keys($scheme) as $field) {
+            if (is_string($field) && (in_array($field, $allowed, true) || str_starts_with($field, 'x-'))) {
+                continue;
+            }
+            $this->failOrWarn("openapi.security.{$name}.{$field} is not valid for a {$type} security scheme.");
+            return false;
+        }
+        $valid = match ($type) {
+            'apiKey' => is_string($scheme['name'] ?? null)
+                && trim($scheme['name']) !== ''
+                && preg_match('/\s/', $scheme['name']) !== 1
+                && is_string($scheme['in'] ?? null)
+                && in_array($scheme['in'], ['query', 'header', 'cookie'], true),
+            'http' => is_string($scheme['scheme'] ?? null)
+                && trim($scheme['scheme']) !== ''
+                && preg_match('/\s/', $scheme['scheme']) !== 1
+                && (!array_key_exists('bearerFormat', $scheme) || is_string($scheme['bearerFormat'])),
+            'mutualTLS' => true,
+            'oauth2' => $this->validOAuthFlows($name, $scheme['flows'] ?? null),
+            'openIdConnect' => is_string($scheme['openIdConnectUrl'] ?? null)
+                && trim($scheme['openIdConnectUrl']) !== '',
+        };
+        if (!$valid) {
+            $this->failOrWarn("openapi.security.{$name} is missing fields required by its {$type} type.");
+        }
+        return $valid;
+    }
+
+    private function validOAuthFlows(string $name, mixed $flows): bool
+    {
+        if (!is_array($flows) || array_is_list($flows) || $flows === []) {
+            return false;
+        }
+        $valid = true;
+        foreach ($flows as $flowName => $flow) {
+            if (
+                !is_string($flowName)
+                || !in_array(
+                    $flowName,
+                    [
+                        'implicit',
+                        'password',
+                        'clientCredentials',
+                        'authorizationCode',
+                    ],
+                    true,
+                )
+            ) {
+                $valid = false;
+                continue;
+            }
+            if (!is_array($flow) || array_is_list($flow)) {
+                $valid = false;
+                continue;
+            }
+            $allowed = match ($flowName) {
+                'implicit' => ['authorizationUrl', 'refreshUrl', 'scopes'],
+                'password', 'clientCredentials' => ['tokenUrl', 'refreshUrl', 'scopes'],
+                'authorizationCode' => ['authorizationUrl', 'tokenUrl', 'refreshUrl', 'scopes'],
+            };
+            foreach (array_keys($flow) as $field) {
+                if (is_string($field) && (in_array($field, $allowed, true) || str_starts_with($field, 'x-'))) {
+                    continue;
+                }
+                $valid = false;
+            }
+            $urlField = in_array($flowName, ['implicit', 'authorizationCode'], true) ? 'authorizationUrl' : 'tokenUrl';
+            if (
+                $flowName === 'authorizationCode'
+                && (!is_string($flow['tokenUrl'] ?? null) || trim($flow['tokenUrl']) === '')
+            ) {
+                $valid = false;
+            }
+            if (!is_string($flow[$urlField] ?? null) || trim($flow[$urlField]) === '') {
+                $valid = false;
+            }
+            if (
+                array_key_exists('refreshUrl', $flow)
+                && (!is_string($flow['refreshUrl']) || trim($flow['refreshUrl']) === '')
+            ) {
+                $valid = false;
+            }
+            $scopes = $flow['scopes'] ?? null;
+            if (!$this->validScopes($scopes)) {
+                $valid = false;
+            }
+        }
+        if (!$valid) {
+            $this->failOrWarn("openapi.security.{$name}.flows contains an invalid OAuth flow.");
+        }
+        return $valid;
+    }
+
+    private function validScopes(mixed $scopes): bool
+    {
+        if (!is_array($scopes) || $scopes !== [] && array_is_list($scopes)) {
+            return false;
+        }
+        foreach ($scopes as $scope => $description) {
+            if (!is_string($scope) || trim($scope) === '' || !is_string($description)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -590,54 +838,182 @@ final class DocumentBuilder
      */
     private function info(): array
     {
-        $title = $this->config->get('openapi.title') ?? $this->config->get('app.name') ?? 'API';
+        $title = $this->config->get('openapi.title');
+        if ($title === null) {
+            $title = $this->config->get('app.name') ?? 'API';
+        }
+        if (!is_string($title) || trim($title) === '') {
+            $this->failOrWarn('openapi.title must be a non-empty string.');
+            $title = 'API';
+        }
+        $version = $this->config->get('openapi.version', '1.0.0');
+        if (!is_string($version) || trim($version) === '') {
+            $this->failOrWarn('openapi.version must be a non-empty string.');
+            $version = '1.0.0';
+        }
         $info = [
-            'title' => (string) $title,
-            'version' => (string) ($this->config->get('openapi.version') ?? '1.0.0'),
+            'title' => $title,
+            'version' => $version,
         ];
         $description = $this->config->get('openapi.description');
-        if (is_string($description) && $description !== '') {
+        if ($description !== null && !is_string($description)) {
+            $this->failOrWarn('openapi.description must be a string or null.');
+        } elseif (is_string($description) && $description !== '') {
             $info['description'] = $description;
         }
         $license = $this->config->get('openapi.license');
-        if (is_string($license) && $license !== '') {
+        if (is_string($license) && trim($license) !== '') {
             $info['license'] = ['name' => $license];
-        } elseif (is_array($license) && isset($license['name']) && is_string($license['name'])) {
-            $info['license'] = $license;
+        } elseif ($license !== null) {
+            if (
+                !is_array($license)
+                || array_is_list($license)
+                || !is_string($license['name'] ?? null)
+                || trim($license['name']) === ''
+            ) {
+                $this->failOrWarn('openapi.license must be a non-empty name or a license object with a name.');
+            } else {
+                $invalid = false;
+                foreach (['url', 'identifier'] as $field) {
+                    if (!array_key_exists($field, $license)) {
+                        continue;
+                    }
+                    if (!is_string($license[$field]) || trim($license[$field]) === '') {
+                        $invalid = true;
+                    }
+                }
+                if ($invalid) {
+                    $this->failOrWarn('openapi.license.url and openapi.license.identifier must be strings.');
+                } else {
+                    $info['license'] = $license;
+                }
+            }
         }
         return $info;
     }
 
     /**
-     * @return list<array{url: string}>
+     * @return list<array<string, mixed>>
      */
     private function servers(): array
     {
         $configured = $this->config->get('openapi.servers');
+        if ($configured !== null && !is_array($configured)) {
+            $this->failOrWarn('openapi.servers must be a list of URLs or server objects.');
+            return [];
+        }
         if (is_array($configured) && $configured !== []) {
             $servers = [];
-            foreach ($configured as $server) {
-                if (is_string($server)) {
+            if (!array_is_list($configured)) {
+                $this->failOrWarn('openapi.servers must be a list of URLs or server objects.');
+                return [];
+            }
+            foreach ($configured as $index => $server) {
+                if (is_string($server) && trim($server) !== '') {
                     $servers[] = ['url' => $server];
-                } elseif (is_array($server) && isset($server['url']) && is_string($server['url'])) {
+                    continue;
+                }
+                if (
+                    !is_array($server)
+                    || array_is_list($server)
+                    || !is_string($server['url'] ?? null)
+                    || trim($server['url']) === ''
+                ) {
+                    $this->failOrWarn("openapi.servers.{$index} must have a non-empty string url.");
+                    continue;
+                }
+                $invalid = false;
+                foreach (array_keys($server) as $key) {
+                    if (is_string($key) && in_array($key, ['url', 'description', 'variables'], true)) {
+                        continue;
+                    }
+                    $invalid = true;
+                }
+                if (array_key_exists('description', $server) && !is_string($server['description'])) {
+                    $invalid = true;
+                }
+                if (
+                    array_key_exists('variables', $server)
+                    && (
+                        !is_array($server['variables'])
+                        || $server['variables'] !== []
+                        && array_is_list($server['variables'])
+                    )
+                ) {
+                    $invalid = true;
+                }
+                if (
+                    is_array($server['variables'] ?? null)
+                    && ($server['variables'] === [] || !array_is_list($server['variables']))
+                ) {
+                    foreach ($server['variables'] as $variableName => $variable) {
+                        if (
+                            !is_string($variableName)
+                            || trim($variableName) === ''
+                            || !is_array($variable)
+                            || array_is_list($variable)
+                            || !is_string($variable['default'] ?? null)
+                        ) {
+                            $invalid = true;
+                            continue;
+                        }
+                        if (array_key_exists('description', $variable) && !is_string($variable['description'])) {
+                            $invalid = true;
+                        }
+                        foreach (array_keys($variable) as $variableField) {
+                            if (
+                                is_string($variableField)
+                                && in_array($variableField, ['enum', 'default', 'description'], true)
+                            ) {
+                                continue;
+                            }
+                            $invalid = true;
+                        }
+                        if (
+                            array_key_exists('enum', $variable)
+                            && (
+                                !is_array($variable['enum'])
+                                || !array_is_list($variable['enum'])
+                                || $variable['enum'] === []
+                                || array_filter($variable['enum'], static fn(mixed $value): bool => !is_string($value))
+                                !== []
+                                || !in_array($variable['default'], $variable['enum'], true)
+                            )
+                        ) {
+                            $invalid = true;
+                        }
+                    }
+                }
+                if ($invalid) {
+                    $this->failOrWarn("openapi.servers.{$index} contains invalid server fields.");
+                } else {
                     $servers[] = $server;
                 }
             }
             return $servers;
         }
         $url = $this->config->get('app.url');
-        return is_string($url) && $url !== '' ? [['url' => $url]] : [];
+        if ($url === null) {
+            return [];
+        }
+        if (!is_string($url) || trim($url) === '') {
+            $this->failOrWarn('app.url must be a non-empty string when used as the OpenAPI server URL.');
+            return [];
+        }
+        return [['url' => $url]];
     }
 
     private function excluded(RouteInfo $route): bool
     {
         $excluded = $this->config->get('openapi.exclude', []);
         if (!is_array($excluded)) {
+            $this->failOrWarn('openapi.exclude must be a list of route keys, names or action classes.');
             return false;
         }
         $key = "{$route->method} {$route->pattern}";
         foreach ($excluded as $value) {
             if (!is_string($value)) {
+                $this->failOrWarn('openapi.exclude must contain only strings.');
                 continue;
             }
             if ($value === $key || $value === $route->name || $value === $route->action) {
@@ -739,6 +1115,167 @@ final class DocumentBuilder
     }
 
     /**
+     * Finds classes whose request and response representations both need a
+     * component. This pass runs before operations are written, making the
+     * request/response component names independent of route order.
+     *
+     * @param list<RouteInfo> $routes
+     * @return list<class-string>
+     */
+    private function schemaSplitClasses(array $routes): array
+    {
+        $inputs = [];
+        $outputs = [];
+        foreach ($routes as $route) {
+            if ($route->method === 'WS' || $this->excluded($route)) {
+                continue;
+            }
+            $input = $this->router->input($route);
+            if (is_array($input)) {
+                $this->collectSchemaClasses($input, $inputs);
+            }
+            $signature = $this->router->signature($route);
+            if ($signature === null) {
+                continue;
+            }
+            $declaring = $signature instanceof \ReflectionMethod ? $signature->getDeclaringClass()->getName() : null;
+            $this->collectOutputType($signature->getReturnType(), $declaring, $outputs, []);
+            $this->collectResponseAttributeClasses($signature, $outputs);
+            if ($signature instanceof \ReflectionMethod) {
+                $this->collectResponseAttributeClasses($signature->getDeclaringClass(), $outputs);
+            }
+        }
+        return array_values(array_intersect(array_keys($inputs), array_keys($outputs)));
+    }
+
+    /**
+     * @param mixed $schema
+     * @param array<class-string, true> $classes
+     */
+    private function collectSchemaClasses(mixed $schema, array &$classes): void
+    {
+        if (!is_array($schema)) {
+            return;
+        }
+        if (is_string($schema['x-class'] ?? null) && class_exists($schema['x-class'])) {
+            $classes[$schema['x-class']] = true;
+        }
+        foreach ($schema as $part) {
+            $this->collectSchemaClasses($part, $classes);
+        }
+    }
+
+    /**
+     * @param array<class-string, true> $classes
+     */
+    private function collectResponseAttributeClasses(
+        \ReflectionFunctionAbstract|\ReflectionClass $reflector,
+        array &$classes,
+    ): void {
+        foreach ($reflector->getAttributes(ResponseAttribute::class) as $attribute) {
+            try {
+                $response = $attribute->newInstance();
+            } catch (\Throwable) {
+                continue;
+            }
+            if (in_array($response->status, self::NO_CONTENT_STATUSES, true)) {
+                continue;
+            }
+            $this->collectResponseBodyClasses($response->body, $classes);
+        }
+    }
+
+    /**
+     * @param string|array<mixed>|null $body
+     * @param array<class-string, true> $classes
+     */
+    private function collectResponseBodyClasses(string|array|null $body, array &$classes): void
+    {
+        if (is_string($body) && class_exists($body)) {
+            $this->collectOutputClass($body, $classes, []);
+            return;
+        }
+        if (is_array($body)) {
+            $this->collectSchemaClasses($body, $classes);
+            foreach ($body as $item) {
+                if (!is_string($item) || !class_exists($item)) {
+                    continue;
+                }
+                $this->collectOutputClass($item, $classes, []);
+            }
+        }
+    }
+
+    /**
+     * @param array<class-string, true> $classes
+     * @param array<class-string, true> $seen
+     */
+    private function collectOutputType(
+        ?\ReflectionType $type,
+        ?string $declaringClass,
+        array &$classes,
+        array $seen,
+    ): void {
+        if ($type === null) {
+            return;
+        }
+        if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+            foreach ($type->getTypes() as $part) {
+                $this->collectOutputType($part, $declaringClass, $classes, $seen);
+            }
+            return;
+        }
+        if (!$type instanceof \ReflectionNamedType || $type->isBuiltin()) {
+            return;
+        }
+        $name = self::resolveTypeName($type->getName(), $declaringClass);
+        if (class_exists($name) || enum_exists($name)) {
+            $this->collectOutputClass($name, $classes, $seen);
+        }
+    }
+
+    /**
+     * @param array<class-string, true> $classes
+     * @param array<class-string, true> $seen
+     */
+    private function collectOutputClass(string $class, array &$classes, array $seen): void
+    {
+        if (isset($seen[$class])) {
+            return;
+        }
+        $seen[$class] = true;
+        if (
+            enum_exists($class)
+            || !class_exists($class)
+            || is_a($class, \DateTimeInterface::class, true)
+            || is_a($class, \JsonSerializable::class, true)
+            || is_a($class, ResponseInterface::class, true)
+            || is_a($class, \Generator::class, true)
+        ) {
+            return;
+        }
+        $classes[$class] = true;
+        foreach (new \ReflectionClass($class)->getProperties(\ReflectionProperty::IS_PUBLIC) as $property) {
+            if ($property->isStatic()) {
+                continue;
+            }
+            $this->collectOutputType($property->getType(), $class, $classes, $seen);
+        }
+    }
+
+    private static function resolveTypeName(string $name, ?string $declaringClass): string
+    {
+        if ($declaringClass !== null && in_array($name, ['self', 'static'], true)) {
+            return $declaringClass;
+        }
+        if ($declaringClass !== null && $name === 'parent') {
+            $parent = new \ReflectionClass($declaringClass)->getParentClass();
+            return $parent === false ? $name : $parent->getName();
+        }
+        return $name;
+    }
+
+    /**
      * @param array<string, mixed> $from
      * @param array<string, mixed> $to
      * @return array<string, mixed>
@@ -833,6 +1370,7 @@ final class DocumentBuilder
                 201 => 'Created',
                 202 => 'Accepted',
                 204 => 'No Content',
+                205 => 'Reset Content',
                 301 => 'Moved Permanently',
                 302 => 'Found',
                 303 => 'See Other',

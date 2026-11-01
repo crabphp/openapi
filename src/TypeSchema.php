@@ -192,9 +192,13 @@ final class TypeSchema
                 "{$where} property {$class}::\${$property->getName()}",
                 $class,
             ) ?? new \stdClass();
-            // Json_encode() writes every initialized public property, including
-            // one whose value is null.
-            $required[] = $property->getName();
+            // Json_encode() omits a public property that has never been
+            // initialized. Promoted properties are initialized by PHP before
+            // the constructor body runs; a declared property without a
+            // default may still be left unset by its constructor.
+            if ($property->isPromoted() || $property->hasDefaultValue()) {
+                $required[] = $property->getName();
+            }
         }
         if ($properties === []) {
             ($this->warn)("{$where} returns {$class}, which has no public properties; its body is generic.");

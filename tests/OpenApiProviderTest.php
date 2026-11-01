@@ -9,7 +9,9 @@ use Crab\Console\Console;
 use Crab\Container\Container;
 use Crab\Contracts\Config\Config as ConfigContract;
 use Crab\Contracts\Console\Console as ConsoleContract;
+use Crab\Contracts\Http\MiddlewareStack as MiddlewareStackContract;
 use Crab\Contracts\Routing\Router as RouterContract;
+use Crab\Http\MiddlewareStack;
 use Crab\OpenApi\DocumentBuilder;
 use Crab\OpenApi\OpenApiProvider;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
@@ -55,5 +57,28 @@ final class OpenApiProviderTest extends TestCase
         self::assertNotEmpty($problems);
         self::assertStringContainsString('openapi.security', implode("\n", $problems));
         self::assertStringContainsString('openapi.middleware.', implode("\n", $problems));
+    }
+
+    public function testBuilderReceivesGlobalMiddlewareFromTheApplicationStack(): void
+    {
+        $router = new Router();
+        $router->get('/global', static fn(): string => 'ok');
+        $config = new Config([
+            'openapi' => [
+                'security' => ['bearer' => ['type' => 'http', 'scheme' => 'bearer']],
+                'middleware' => [BearerAuth::class => ['security' => 'bearer']],
+            ],
+        ]);
+        $container = new Container();
+        $container->instance(ConfigContract::class, $config);
+        $container->instance(RouterContract::class, $router);
+        $stack = new MiddlewareStack($router);
+        $stack->add(new BearerAuth());
+        $container->instance(MiddlewareStackContract::class, $stack);
+
+        new OpenApiProvider()->register($container);
+
+        $operation = $container->get(DocumentBuilder::class)->build(false)->document['paths']['/global']['get'];
+        self::assertSame([['bearer' => []]], $operation['security']);
     }
 }

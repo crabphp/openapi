@@ -24,6 +24,29 @@ final class SchemaRegistry
      */
     private array $building = [];
 
+    /**
+     * Classes used as both request and response schemas. They receive
+     * separate component names so one route's direction cannot change the
+     * validation or representation rules another route sees.
+     *
+     * @var array<class-string, true>
+     */
+    private array $splitClasses = [];
+
+    /**
+     * @param list<class-string> $classes
+     */
+    public function splitClasses(array $classes): void
+    {
+        $this->splitClasses = [];
+        foreach ($classes as $class) {
+            if (!is_string($class) || $class === '') {
+                continue;
+            }
+            $this->splitClasses[$class] = true;
+        }
+    }
+
     public function add(string $name, array|\stdClass $schema): void
     {
         $this->schemas[$name] ??= $schema;
@@ -31,21 +54,21 @@ final class SchemaRegistry
 
     /**
      * Registers a schema provided inline by the route description and returns
-     * its reference. The first occurrence decides the component.
+     * its reference.
      *
      * @param class-string $class
      * @param array<string, mixed> $schema
      * @return array{'$ref': string}
      */
-    public function fromInlineClass(string $class, array $schema): array
+    public function fromInlineClass(string $class, array $schema, string $role = 'input'): array
     {
-        $name = self::name($class);
+        $name = $this->componentName($class, $role);
         if (isset($this->schemas[$name])) {
             return ['$ref' => '#/components/schemas/' . $name];
         }
         unset($schema['x-class']);
         $this->schemas[$name] = ['type' => 'object'];
-        $this->schemas[$name] = $this->normalize($schema);
+        $this->schemas[$name] = $this->normalize($schema, $role);
         return ['$ref' => '#/components/schemas/' . $name];
     }
 
@@ -57,9 +80,9 @@ final class SchemaRegistry
      * @param \Closure(): (array<string, mixed>|\stdClass) $schema
      * @return array{'$ref': string}
      */
-    public function fromClass(string $class, \Closure $schema): array
+    public function fromClass(string $class, \Closure $schema, string $role = 'output'): array
     {
-        $name = self::name($class);
+        $name = $this->componentName($class, $role);
         if (isset($this->schemas[$name])) {
             return ['$ref' => '#/components/schemas/' . $name];
         }
@@ -85,15 +108,16 @@ final class SchemaRegistry
      * @param array<string, mixed> $schema
      * @return array<string, mixed>|\stdClass
      */
-    public function normalize(array $schema): array|\stdClass
+    public function normalize(array $schema, string $role = 'input'): array|\stdClass
     {
         $class = $schema['x-class'] ?? null;
         if (is_string($class) && class_exists($class)) {
-            if (isset($this->schemas[self::name($class)])) {
-                return ['$ref' => '#/components/schemas/' . self::name($class)];
+            $name = $this->componentName($class, $role);
+            if (isset($this->schemas[$name])) {
+                return ['$ref' => '#/components/schemas/' . $name];
             }
             unset($schema['x-class']);
-            return $this->fromInlineClass($class, $schema);
+            return $this->fromInlineClass($class, $schema, $role);
         }
 
         if (isset($schema['x-rules'])) {
@@ -125,17 +149,17 @@ final class SchemaRegistry
                 if (!is_array($property)) {
                     continue;
                 }
-                $schema[$key][$name] = $this->normalize($property);
+                $schema[$key][$name] = $this->normalize($property, $role);
             }
         }
         if (isset($schema['items']) && is_array($schema['items'])) {
-            $schema['items'] = $this->normalize($schema['items']);
+            $schema['items'] = $this->normalize($schema['items'], $role);
         }
         foreach (['additionalProperties', 'contains', 'not'] as $key) {
             if (!isset($schema[$key]) || !is_array($schema[$key])) {
                 continue;
             }
-            $schema[$key] = $this->normalize($schema[$key]);
+            $schema[$key] = $this->normalize($schema[$key], $role);
         }
         foreach (['allOf', 'anyOf', 'oneOf', 'prefixItems'] as $key) {
             if (!isset($schema[$key]) || !is_array($schema[$key])) {
@@ -145,10 +169,47 @@ final class SchemaRegistry
                 if (!is_array($part)) {
                     continue;
                 }
-                $schema[$key][$index] = $this->normalize($part);
+                $schema[$key][$index] = $this->normalize($part, $role);
+            }
+        }
+        if (isset($schema['enum']) && is_array($schema['enum']) && self::allowsNull($schema)) {
+            if (!in_array(null, $schema['enum'], true)) {
+                $schema['enum'][] = null;
             }
         }
         return $schema;
+    }
+
+    private function componentName(string $class, string $role): string
+    {
+        $name = self::name($class);
+        if (!isset($this->splitClasses[$class])) {
+            return $name;
+        }
+        return $name . ($role === 'output' ? '.Output' : '.Input');
+    }
+
+    private static function allowsNull(array $schema): bool
+    {
+        return (
+            in_array('null', (array) ($schema['type'] ?? []), true)
+            || isset($schema['oneOf'])
+            && is_array($schema['oneOf'])
+            && self::hasNullPart($schema['oneOf'])
+        );
+    }
+
+    /**
+     * @param array<mixed> $parts
+     */
+    private static function hasNullPart(array $parts): bool
+    {
+        foreach ($parts as $part) {
+            if (is_array($part) && in_array('null', (array) ($part['type'] ?? []), true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

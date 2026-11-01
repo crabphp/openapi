@@ -20,7 +20,13 @@ final readonly class Security
      */
     public function __construct(string ...$schemes)
     {
-        if ($schemes === []) {
+        if (
+            $schemes === []
+            || array_filter(
+                $schemes,
+                static fn(mixed $scheme): bool => trim($scheme) === '' || preg_match('/\s/', $scheme) === 1,
+            ) !== []
+        ) {
             throw new \InvalidArgumentException('Security names at least one scheme.');
         }
         $this->schemes = array_values($schemes);

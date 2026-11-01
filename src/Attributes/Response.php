@@ -28,8 +28,15 @@ final readonly class Response
         if ($status < 100 || $status > 599) {
             throw new \InvalidArgumentException('An HTTP response status must be between 100 and 599.');
         }
-        if (trim($contentType) === '') {
-            throw new \InvalidArgumentException('A response content type may not be empty.');
+        if (
+            trim($contentType) === ''
+            || $contentType !== trim($contentType)
+            || preg_match('/[\x00-\x1F\x7F]/', $contentType) === 1
+            || !preg_match('~^[^/\s]+/[^;\s]+(?:\s*;.*)?$~', $contentType)
+        ) {
+            throw new \InvalidArgumentException(
+                'A response content type may not be empty and must be a valid media type.',
+            );
         }
     }
 }

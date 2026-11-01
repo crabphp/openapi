@@ -165,11 +165,13 @@ Path, query and body input automatically add `422`. A required identity paramete
 
 A class named `App\Http\Order` becomes the component `App.Http.Order`. Components are sorted and repeated classes are registered once. Output has no timestamps, uses stable route order and is safe to commit. `x-crab-rules`, `x-crab-min-bytes`, `x-crab-max-bytes` and `x-crab-media-types` retain validation details with no OpenAPI keyword.
 
+When one class is used for both request validation and a response view, it gets separate `.Input` and `.Output` components so validation constraints never depend on route order. Mapped middleware on the application's global stack is applied to every operation; middleware stacked on one route requires all of its mapped security schemes.
+
 ## Limits
 
 - Response bodies are not inspected at runtime. An attribute states what the action promises.
 - Docblock types are not parsed into schemas; use DTOs or `#[Response]`.
-- All public DTO properties are required because PHP's default JSON serialization writes them.
+- Promoted or defaulted public DTO properties are required. A public property without a default may be uninitialized, and is therefore optional in the response schema because PHP's JSON serialization omits it.
 - OpenAPI 3.1 is the output format. A 3.0 or YAML renderer is not included.
 - A custom `ErrorRenderer` needs `openapi.error_schema`, or strict generation reports that the error body is unknown.
 
