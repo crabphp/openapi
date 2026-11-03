@@ -18,8 +18,8 @@ use Crab\OpenApi\OpenApiPlugin;
 return App::configure(__DIR__)
     ->withPlugins([
         OpenApiPlugin::class,
-        AppPlugin::class,
     ])
+    ->withSetup(Setup::class)
     ->withRouting(routes: 'routes/web.php')
     ->create();
 ```
