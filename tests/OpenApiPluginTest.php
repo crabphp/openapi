@@ -13,12 +13,12 @@ use Crab\Contracts\Http\MiddlewareStack as MiddlewareStackContract;
 use Crab\Contracts\Routing\Router as RouterContract;
 use Crab\Http\MiddlewareStack;
 use Crab\OpenApi\DocumentBuilder;
-use Crab\OpenApi\OpenApiProvider;
+use Crab\OpenApi\OpenApiPlugin;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\Routing\Router;
 use PHPUnit\Framework\TestCase;
 
-final class OpenApiProviderTest extends TestCase
+final class OpenApiPluginTest extends TestCase
 {
     public function testRegistersDefaultsTheBuilderAndTheCommand(): void
     {
@@ -28,7 +28,7 @@ final class OpenApiProviderTest extends TestCase
         $container->instance(RouterContract::class, new Router());
         $container->instance(ConsoleContract::class, new Console($container));
 
-        new OpenApiProvider()->register($container);
+        new OpenApiPlugin()->register($container);
 
         self::assertSame('openapi.json', $config->get('openapi.output'));
         self::assertTrue($config->get('openapi.strict'));
@@ -51,7 +51,7 @@ final class OpenApiProviderTest extends TestCase
         $container->instance(ConfigContract::class, $config);
         $container->instance(RouterContract::class, new Router());
 
-        new OpenApiProvider()->register($container);
+        new OpenApiPlugin()->register($container);
         $problems = $config->problems('openapi');
 
         self::assertNotEmpty($problems);
@@ -76,7 +76,7 @@ final class OpenApiProviderTest extends TestCase
         $stack->add(new BearerAuth());
         $container->instance(MiddlewareStackContract::class, $stack);
 
-        new OpenApiProvider()->register($container);
+        new OpenApiPlugin()->register($container);
 
         $operation = $container->get(DocumentBuilder::class)->build(false)->document['paths']['/global']['get'];
         self::assertSame([['bearer' => []]], $operation['security']);

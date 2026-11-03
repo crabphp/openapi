@@ -9,7 +9,7 @@ use Crab\Contracts\Console\Console;
 use Crab\Contracts\Container\Container;
 use Crab\Contracts\Http\ErrorRenderer;
 use Crab\Contracts\Http\MiddlewareStack;
-use Crab\Contracts\Provider;
+use Crab\Contracts\Plugin;
 use Crab\Contracts\Routing\Router;
 use Crab\OpenApi\Commands\Generate;
 
@@ -17,7 +17,7 @@ use Crab\OpenApi\Commands\Generate;
  * Adds the openapi:generate command and the "openapi" configuration
  * section. It adds no middleware and no request-path work.
  */
-final class OpenApiProvider implements Provider
+final class OpenApiPlugin implements Plugin
 {
     public function register(Container $container): void
     {

@@ -10,15 +10,15 @@ The package runs at build time. It adds a console command and configuration defa
 composer require crabphp/openapi
 ```
 
-Register the provider in `app.php`:
+Register the plugin in `app.php`:
 
 ```php
-use Crab\OpenApi\OpenApiProvider;
+use Crab\OpenApi\OpenApiPlugin;
 
 return App::configure(__DIR__)
-    ->withProviders([
-        OpenApiProvider::class,
-        AppProvider::class,
+    ->withPlugins([
+        OpenApiPlugin::class,
+        AppPlugin::class,
     ])
     ->withRouting(routes: 'routes/web.php')
     ->create();
