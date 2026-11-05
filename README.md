@@ -167,6 +167,8 @@ Path, query and body input automatically add `422`. A required identity paramete
 
 A class named `App\Http\Order` becomes the component `App.Http.Order`. Components are sorted and repeated classes are registered once. Output has no timestamps, uses stable route order and is safe to commit. `x-crab-rules`, `x-crab-min-bytes`, `x-crab-max-bytes` and `x-crab-media-types` retain validation details with no OpenAPI keyword.
 
+Input fields keep their own nullability, defaults and rules beside the component reference. A nullable use of a class or enum does not make every other use nullable.
+
 When one class is used for both request validation and a response view, it gets separate `.Input` and `.Output` components so validation constraints never depend on route order. Mapped middleware on the application's global stack is applied to every operation; middleware stacked on one route requires all of its mapped security schemes.
 
 ## Limits

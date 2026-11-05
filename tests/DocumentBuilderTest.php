@@ -15,6 +15,7 @@ use Crab\OpenApi\Tests\Fixtures\ApiKeyAuth;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\OpenApi\Tests\Fixtures\CreateThingAction;
 use Crab\OpenApi\Tests\Fixtures\HiddenAction;
+use Crab\OpenApi\Tests\Fixtures\Kind;
 use Crab\OpenApi\Tests\Fixtures\ListThingsAction;
 use Crab\OpenApi\Tests\Fixtures\NullableInput;
 use Crab\OpenApi\Tests\Fixtures\NullableKindView;
@@ -29,6 +30,8 @@ use Crab\OpenApi\Tests\Fixtures\UninitializedView;
 use Crab\OpenApi\Tests\Fixtures\UploadThing;
 use Crab\Routing\FromQuery;
 use Crab\Routing\Router;
+use Crab\Validation\Data;
+use Crab\Validation\Fields;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -267,7 +270,7 @@ final class DocumentBuilderTest extends TestCase
         );
     }
 
-    public function testNullableBackedEnumInputComponentsIncludeNullInTheirEnum(): void
+    public function testNullableBackedEnumInputsKeepNullOutsideTheSharedComponent(): void
     {
         $router = new Router();
         $router->post('/nullable-input', static fn(NullableInput $input): string => 'ok');
@@ -275,8 +278,84 @@ final class DocumentBuilderTest extends TestCase
         $document = $this->document($router);
         $schema = $document['components']['schemas']['Crab.OpenApi.Tests.Fixtures.Kind'];
 
-        self::assertSame(['string', 'null'], $schema['type']);
-        self::assertSame(['simple', 'special', null], $schema['enum']);
+        self::assertSame('string', $schema['type']);
+        self::assertSame(['simple', 'special'], $schema['enum']);
+        self::assertSame(
+            [
+                'oneOf' => [
+                    ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.Kind'],
+                    ['type' => 'null'],
+                ],
+                'default' => null,
+            ],
+            $document['components']['schemas']['Crab.OpenApi.Tests.Fixtures.NullableInput']['properties']['kind'],
+        );
+    }
+
+    public function testSharedInputClassesKeepEachFieldsNullabilityAndDefault(): void
+    {
+        $documents = [];
+        foreach ([false, true] as $reverse) {
+            $router = new Router();
+            $routes = [
+                '/simple' => static fn(#[FromQuery] Kind $kind = Kind::Simple): string => 'ok',
+                '/special' => static fn(#[FromQuery] Kind $kind = Kind::Special): string => 'ok',
+            ];
+            foreach ($reverse ? array_reverse($routes) : $routes as $path => $action) {
+                $router->get($path, $action);
+            }
+            $router->post(
+                '/objects',
+                static fn(
+                    #[Fields([
+                        'nullable' => '?' . SharedThing::class,
+                        'required' => SharedThing::class,
+                    ])]
+                    Data $input,
+                ): string => 'ok',
+            );
+            $documents[] = $this->document($router);
+        }
+
+        self::assertSame($documents[0], $documents[1]);
+        $document = $documents[0];
+        $enum = ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.Kind'];
+        self::assertSame(
+            $enum + ['default' => 'simple'],
+            $document['paths']['/simple']['get']['parameters'][0]['schema'],
+        );
+        self::assertSame(
+            $enum + ['default' => 'special'],
+            $document['paths']['/special']['get']['parameters'][0]['schema'],
+        );
+        $properties =
+            $document['paths']['/objects']['post']['requestBody']['content']['application/json']['schema']['properties'];
+        $object = ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.SharedThing'];
+        self::assertSame($object, $properties['required']);
+        self::assertSame(['oneOf' => [$object, ['type' => 'null']]], $properties['nullable']);
+        self::assertSame(
+            'object',
+            $document['components']['schemas']['Crab.OpenApi.Tests.Fixtures.SharedThing']['type'],
+        );
+    }
+
+    public function testEmptySchemaObjectsRemainObjectsWhenEncoded(): void
+    {
+        $router = new Router();
+        $router->get('/anything', #[Response(body: [
+            'type' => 'object',
+            'properties' => [
+                'anything' => [],
+                'empty' => ['type' => 'object', 'properties' => []],
+            ],
+        ])]
+        static fn(): array => []);
+
+        $document = json_decode(json_encode($this->document($router), JSON_THROW_ON_ERROR), flags: JSON_THROW_ON_ERROR);
+        $schema = $document->paths->{'/anything'}->get->responses->{'200'}->content->{'application/json'}->schema;
+
+        self::assertInstanceOf(\stdClass::class, $schema->properties->anything);
+        self::assertInstanceOf(\stdClass::class, $schema->properties->empty->properties);
     }
 
     public function testTrueAndFalseReturnTypesAreInferredAsBooleans(): void

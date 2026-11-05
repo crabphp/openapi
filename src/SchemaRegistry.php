@@ -112,12 +112,34 @@ final class SchemaRegistry
     {
         $class = $schema['x-class'] ?? null;
         if (is_string($class) && class_exists($class)) {
-            $name = $this->componentName($class, $role);
-            if (isset($this->schemas[$name])) {
-                return ['$ref' => '#/components/schemas/' . $name];
-            }
             unset($schema['x-class']);
-            return $this->fromInlineClass($class, $schema, $role);
+            $nullable = in_array('null', (array) ($schema['type'] ?? []), true);
+            if ($nullable) {
+                $types = array_values(array_diff((array) $schema['type'], ['null']));
+                $schema['type'] = count($types) === 1 ? $types[0] : $types;
+            }
+            // A field's default, rules and nullability belong to that use of
+            // the class. Keeping them in the component makes the first field
+            // change the contract of every later field using the same class.
+            $shape = array_intersect_key($schema, array_flip([
+                'type',
+                'properties',
+                'required',
+                'additionalProperties',
+            ]));
+            if (is_subclass_of($class, \BackedEnum::class)) {
+                $values = array_map(static fn(\BackedEnum $case): int|string => $case->value, $class::cases());
+                $shape = ['type' => is_int($values[0] ?? '') ? 'integer' : 'string', 'enum' => $values];
+                if (($schema['enum'] ?? null) === $values) {
+                    unset($schema['enum']);
+                }
+            }
+            $local = array_diff_key($schema, array_flip(['type', 'properties', 'required', 'additionalProperties']));
+            $reference = $this->fromInlineClass($class, $shape, $role);
+            if ($nullable) {
+                $reference = ['oneOf' => [$reference, ['type' => 'null']]];
+            }
+            return $this->normalize([...$reference, ...$local], $role);
         }
 
         if (isset($schema['x-rules'])) {
@@ -151,6 +173,9 @@ final class SchemaRegistry
                 }
                 $schema[$key][$name] = $this->normalize($property, $role);
             }
+            if ($schema[$key] === []) {
+                $schema[$key] = new \stdClass();
+            }
         }
         if (isset($schema['items']) && is_array($schema['items'])) {
             $schema['items'] = $this->normalize($schema['items'], $role);
@@ -177,7 +202,7 @@ final class SchemaRegistry
                 $schema['enum'][] = null;
             }
         }
-        return $schema;
+        return $schema === [] ? new \stdClass() : $schema;
     }
 
     private function componentName(string $class, string $role): string
