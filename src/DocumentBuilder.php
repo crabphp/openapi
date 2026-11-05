@@ -83,6 +83,7 @@ final class DocumentBuilder
 
         $paths = [];
         $pathMethods = [];
+        $pathPatterns = [];
         foreach ($this->router->routes() as $route) {
             if ($route->method === 'WS' || $this->excluded($route)) {
                 continue;
@@ -98,12 +99,16 @@ final class DocumentBuilder
             }
             $path = self::path($route->pattern);
             $collision = (string) preg_replace('/\{[^{}]+\}/', '{}', $path);
-            if (isset($pathMethods[$collision][$method])) {
+            if (
+                isset($pathMethods[$collision][$method])
+                || isset($pathPatterns[$collision]) && $pathPatterns[$collision] !== $path
+            ) {
                 $this->failOrWarn(
                     "{$route->method} {$route->pattern} resolves to the same OpenAPI path as another route.",
                 );
             }
             $pathMethods[$collision][$method] = true;
+            $pathPatterns[$collision] ??= $path;
             $paths[$path][$method] = $operation;
         }
         ksort($paths);
@@ -325,7 +330,7 @@ final class DocumentBuilder
                     ? $response->description
                     : self::reason($response->status),
             ];
-            if ($response->body !== null && in_array($response->status, self::NO_CONTENT_STATUSES, true)) {
+            if ($response->body !== null && self::hasNoContent($response->status)) {
                 $this->failOrWarn(
                     "{$where} declares a body for HTTP {$response->status}, which must not have response content.",
                 );
@@ -442,6 +447,9 @@ final class DocumentBuilder
             return $this->types->forClass($body, $where);
         }
         if (array_is_list($body)) {
+            if ($body === []) {
+                return new \stdClass();
+            }
             if (count($body) === 1 && is_string($body[0]) && class_exists($body[0])) {
                 return ['type' => 'array', 'items' => $this->types->forClass($body[0], $where)];
             }
@@ -524,7 +532,17 @@ final class DocumentBuilder
                     continue;
                 }
                 if (!isset($responses[(string) $status])) {
-                    $responses[(string) $status] = $this->errorResponse(self::reason($status));
+                    if ($status >= 400) {
+                        $responses[(string) $status] = $this->errorResponse(self::reason($status));
+                    } else {
+                        $responses[(string) $status] = ['description' => self::reason($status)];
+                        if (!self::hasNoContent($status)) {
+                            $this->failOrWarn(
+                                "{$route->method} {$route->pattern} maps middleware response {$status} without a body schema; declare it with #[Response].",
+                            );
+                            $responses[(string) $status]['x-crab-untyped-body'] = true;
+                        }
+                    }
                 }
             }
         }
@@ -651,6 +669,11 @@ final class DocumentBuilder
             }
             if (!$this->validSecurityScheme($name, $scheme)) {
                 continue;
+            }
+            if ($scheme['type'] === 'oauth2') {
+                foreach ($scheme['flows'] as $flowName => $flow) {
+                    $scheme['flows'][$flowName]['scopes'] = $flow['scopes'] === [] ? new \stdClass() : $flow['scopes'];
+                }
             }
             $schemes[$name] = $scheme;
         }
@@ -909,7 +932,9 @@ final class DocumentBuilder
                         $invalid = true;
                     }
                 }
-                if ($invalid) {
+                if (isset($license['url'], $license['identifier'])) {
+                    $this->failOrWarn('openapi.license takes either url or identifier, not both.');
+                } elseif ($invalid) {
                     $this->failOrWarn('openapi.license.url and openapi.license.identifier must be strings.');
                 } else {
                     $info['license'] = $license;
@@ -1014,6 +1039,9 @@ final class DocumentBuilder
                 if ($invalid) {
                     $this->failOrWarn("openapi.servers.{$index} contains invalid server fields.");
                 } else {
+                    if (($server['variables'] ?? null) === []) {
+                        $server['variables'] = new \stdClass();
+                    }
                     $servers[] = $server;
                 }
             }
@@ -1207,7 +1235,7 @@ final class DocumentBuilder
             } catch (\Throwable) {
                 continue;
             }
-            if (in_array($response->status, self::NO_CONTENT_STATUSES, true)) {
+            if (self::hasNoContent($response->status)) {
                 continue;
             }
             $this->collectResponseBodyClasses($response->body, $classes);
@@ -1312,7 +1340,13 @@ final class DocumentBuilder
     private static function mergeResponse(array $from, array $to): array
     {
         if (isset($to['content']) && is_array($to['content'])) {
-            $from['content'] = [...($from['content'] ?? []), ...$to['content']];
+            foreach ($to['content'] as $media => $content) {
+                $earlier = $from['content'][$media]['schema'] ?? null;
+                if ($earlier !== null && $earlier !== $content['schema']) {
+                    $content['schema'] = ['anyOf' => [$earlier, $content['schema']]];
+                }
+                $from['content'][$media] = $content;
+            }
         }
         if (isset($to['headers']) && is_array($to['headers'])) {
             $from['headers'] = [...($from['headers'] ?? []), ...$to['headers']];
@@ -1421,5 +1455,10 @@ final class DocumentBuilder
                 504 => 'Gateway Timeout',
             ][$status] ?? 'Response'
         );
+    }
+
+    private static function hasNoContent(int $status): bool
+    {
+        return $status < 200 || in_array($status, self::NO_CONTENT_STATUSES, true);
     }
 }

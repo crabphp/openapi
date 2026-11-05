@@ -97,7 +97,10 @@ The generator constructs only this package's attributes. Other action metadata i
 - one class name for a JSON object;
 - `[OrderView::class]` for a JSON list of that class;
 - an inline JSON Schema array;
+- `[]` for an explicitly unconstrained JSON value;
 - `null` for no body.
+
+Repeated `#[Response]` declarations for the same status keep each media type. Schemas for the same media type are combined with `anyOf`. Informational responses and statuses `204`, `205` and `304` have no content; declaring a body for one fails strict generation.
 
 A declared error status without a body uses the shared Crab `Error` component:
 
@@ -137,7 +140,7 @@ The plugin declares and checks its settings when the document builder is first u
 | `openapi.title` | `app.name`, then `API` | Document title |
 | `openapi.version` | `1.0.0` | API version |
 | `openapi.description` | `null` | Document description |
-| `openapi.license` | `null` | A license name or OpenAPI license object |
+| `openapi.license` | `null` | A license name or object with `name` and optionally `url` or `identifier`, never both |
 | `openapi.output` | `openapi.json` | Local file, relative to `app.path` unless absolute; `-` writes to standard output |
 | `openapi.strict` | `true` | Fail on response details PHP cannot prove |
 | `openapi.servers` | `app.url` | Server URLs or server objects |
@@ -169,6 +172,8 @@ Every security name used by middleware or `#[Security]` must have a matching ent
 
 Path, query and body input automatically add `422`. A required identity parameter or mapped security scheme adds `401`. Error responses document both `application/json` and Crab's plain-text negotiation.
 
+Mapped middleware statuses below `400` do not use the error schema. A status that allows content needs an explicit `#[Response]` declaration; statuses that forbid content are documented without a body.
+
 ## Components and determinism
 
 A class named `App\Http\Order` becomes the component `App.Http.Order`. Components are sorted and repeated classes are registered once. Output has no timestamps, uses stable route order and is safe to commit. `x-crab-rules`, `x-crab-min-bytes`, `x-crab-max-bytes` and `x-crab-media-types` retain validation details with no OpenAPI keyword.
@@ -183,6 +188,7 @@ When one class is used for both request validation and a response view, it gets 
 - Docblock types are not parsed into schemas; use DTOs or `#[Response]`.
 - Promoted or defaulted public DTO properties are required. A public property without a default may be uninitialized, and is therefore optional in the response schema because PHP's JSON serialization omits it.
 - OpenAPI 3.1 is the output format. A 3.0 or YAML renderer is not included.
+- Equivalent templated paths must use the same parameter names across methods. For example, use `/orders/{id}` for both `GET` and `PUT`; `/orders/{name}` is an OpenAPI path collision even when its HTTP method differs.
 - A custom `ErrorRenderer` needs `openapi.error_schema`, or strict generation reports that the error body is unknown.
 
 ## Tests

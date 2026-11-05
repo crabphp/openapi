@@ -233,6 +233,33 @@ final class DocumentBuilderTest extends TestCase
         );
     }
 
+    public function testRepeatedResponseDeclarationsKeepEveryBodySchema(): void
+    {
+        $router = new Router();
+        $router->get(
+            '/variants',
+            #[Response(body: ['type' => 'integer']), Response(body: ['type' => 'string'])] static fn(): int|string => 1,
+        );
+
+        $schema = $this->document(
+            $router,
+        )['paths']['/variants']['get']['responses']['200']['content']['application/json']['schema'];
+
+        self::assertSame(['anyOf' => [['type' => 'integer'], ['type' => 'string']]], $schema);
+    }
+
+    public function testAnExplicitEmptyResponseSchemaAllowsAnyJsonValue(): void
+    {
+        $router = new Router();
+        $router->get('/anything', #[Response(body: [])] static fn(): mixed => null);
+
+        $schema = $this->document(
+            $router,
+        )['paths']['/anything']['get']['responses']['200']['content']['application/json']['schema'];
+
+        self::assertInstanceOf(\stdClass::class, $schema);
+    }
+
     public function testNeverNeedsAnExplicitRuntimeResponse(): void
     {
         $router = new Router();
@@ -638,6 +665,7 @@ final class DocumentBuilderTest extends TestCase
         $router = new Router();
         $router->get('/no-content', #[Response(204, body: Thing::class)] static fn(): string => 'ok');
         $router->get('/not-modified', #[Response(304, body: Thing::class)] static fn(): string => 'ok');
+        $router->get('/early-hints', #[Response(103, body: Thing::class)] static fn(): string => 'ok');
 
         $builder = $this->builder($router);
         try {
@@ -650,6 +678,31 @@ final class DocumentBuilderTest extends TestCase
         $document = $builder->build(false)->document;
         self::assertArrayNotHasKey('content', $document['paths']['/no-content']['get']['responses']['204']);
         self::assertArrayNotHasKey('content', $document['paths']['/not-modified']['get']['responses']['304']);
+        self::assertArrayNotHasKey('content', $document['paths']['/early-hints']['get']['responses']['103']);
+    }
+
+    public function testMiddlewareResponsesDoNotInventBodiesForBodylessStatuses(): void
+    {
+        $router = new Router();
+        $router->get('/mapped', static fn(): string => 'ok')->middleware(new BearerAuth());
+
+        $responses = $this->document($router, [
+            'middleware' => [BearerAuth::class => ['responses' => [204, 205, 304]]],
+        ])['paths']['/mapped']['get']['responses'];
+
+        foreach ([204, 205, 304] as $status) {
+            self::assertArrayNotHasKey('content', $responses[$status]);
+        }
+    }
+
+    public function testMappedSuccessResponsesNeedAnExplicitBodyDeclaration(): void
+    {
+        $router = new Router();
+        $router->get('/mapped', static fn(): string => 'ok')->middleware(new BearerAuth());
+
+        $this->expectException(GenerationException::class);
+        $this->expectExceptionMessage('middleware response 202 without a body schema');
+        $this->document($router, ['middleware' => [BearerAuth::class => ['responses' => [202]]]]);
     }
 
     public function testUndefinedSecuritySchemesFailStrictGeneration(): void
@@ -763,6 +816,37 @@ final class DocumentBuilderTest extends TestCase
         self::assertSame([['url' => 'https://api.example.test']], $document['servers']);
     }
 
+    public function testEmptyOAuthScopesAndServerVariablesEncodeAsObjects(): void
+    {
+        $document = $this->document(new Router(), [
+            'security' => [
+                'oauth' => [
+                    'type' => 'oauth2',
+                    'flows' => ['clientCredentials' => ['tokenUrl' => '/token', 'scopes' => []]],
+                ],
+            ],
+            'servers' => [['url' => 'https://api.example.test', 'variables' => []]],
+        ]);
+        $decoded = json_decode(json_encode($document, JSON_THROW_ON_ERROR), flags: JSON_THROW_ON_ERROR);
+
+        self::assertInstanceOf(
+            \stdClass::class,
+            $decoded->components->securitySchemes->oauth->flows->clientCredentials->scopes,
+        );
+        self::assertInstanceOf(\stdClass::class, $decoded->servers[0]->variables);
+    }
+
+    public function testALicenseCannotHaveBothAnIdentifierAndAUrl(): void
+    {
+        $this->expectException(GenerationException::class);
+        $this->expectExceptionMessage('openapi.license');
+        $this->document(new Router(), ['license' => [
+            'name' => 'MIT',
+            'identifier' => 'MIT',
+            'url' => 'https://opensource.org/license/mit/',
+        ]]);
+    }
+
     public function testMethodOperationDetailsExtendClassOperationDefaults(): void
     {
         $router = new Router();
@@ -828,6 +912,11 @@ final class DocumentBuilderTest extends TestCase
                 $router->get('/things/{id:\d+}', static fn(int $id): string => 'one');
                 $router->get('/things/{slug}', static fn(string $slug): string => 'two');
             }],
+            'equivalent paths have different parameter names across methods' =>
+                [static function (Router $router): void {
+                    $router->get('/things/{id}', static fn(int $id): string => 'one');
+                    $router->put('/things/{slug}', static fn(string $slug): string => 'two');
+                }],
             'operation ids repeat' => [static function (Router $router): void {
                 $router->get('/one', #[Operation(operationId: 'same')] static fn(): string => 'one');
                 $router->get('/two', #[Operation(operationId: 'same')] static fn(): string => 'two');
