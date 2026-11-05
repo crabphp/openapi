@@ -56,6 +56,8 @@ Inputs come from the same schemas the router uses to validate a request:
 - body classes, nested objects, enums, dates, lists and files;
 - `multipart/form-data` when a body contains a file.
 
+Query lists use bracketed names such as `ids[]` with `form` serialization and `explode: true`, so `ids[]=1&ids[]=2` reaches Crab as a list. Query objects with scalar properties use `deepObject`, such as `filter[name]=crab`. Nested query collections and untyped arrays have no portable OpenAPI serialization; strict generation refuses them and non-strict generation reports a warning.
+
 Responses are inferred only where Crab's runtime makes the result unambiguous:
 
 | Return type | Documented response |

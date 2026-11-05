@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Crab\OpenApi\Tests;
 
 use Crab\Config\Config;
+use Crab\Http\Request;
 use Crab\OpenApi\Attributes\Hidden;
 use Crab\OpenApi\Attributes\Operation;
 use Crab\OpenApi\Attributes\Response;
@@ -36,6 +37,7 @@ use Crab\Routing\FromQuery;
 use Crab\Routing\Router;
 use Crab\Validation\Data;
 use Crab\Validation\Fields;
+use Crab\Validation\ListOf;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
@@ -136,6 +138,71 @@ final class DocumentBuilderTest extends TestCase
             $paths['/maybe-thing']['get']['responses']['200']['content']['application/json']['schema'],
         );
         self::assertSame('No Content', $paths['/maybe-thing']['get']['responses']['204']['description']);
+    }
+
+    public function testQueryListsUseNamesThatTheFrameworkReadsAsLists(): void
+    {
+        $router = new Router();
+        $router->get('/lists', static fn(#[FromQuery, ListOf('int')] array $ids): string => implode(',', $ids));
+        $parameter = $this->document($router)['paths']['/lists']['get']['parameters'][0];
+        $query = implode('&', array_map(
+            static fn(int $id): string => rawurlencode($parameter['name']) . '=' . $id,
+            [1, 2],
+        ));
+
+        $response = $router->handle(new Request('GET', '/lists?' . $query));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('1,2', (string) $response->getBody());
+        self::assertSame('ids[]', $parameter['name']);
+        self::assertSame('form', $parameter['style']);
+        self::assertTrue($parameter['explode']);
+    }
+
+    public function testQueryObjectsUseDeepObjectSerialization(): void
+    {
+        $router = new Router();
+        $router->get(
+            '/filters',
+            static fn(
+                #[
+                    FromQuery,
+                    Fields([
+                        'filter' => ['name' => 'string'],
+                    ]),
+                ]
+                Data $query,
+            ): string => $query->filter->name,
+        );
+        $parameter = $this->document($router)['paths']['/filters']['get']['parameters'][0];
+        $name = $parameter['style'] === 'deepObject' ? $parameter['name'] . '[name]' : 'name';
+
+        $response = $router->handle(new Request('GET', '/filters?' . rawurlencode($name) . '=crab'));
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('crab', (string) $response->getBody());
+        self::assertSame('deepObject', $parameter['style']);
+    }
+
+    public function testNestedQueryCollectionsAreReportedAsUnsupported(): void
+    {
+        $router = new Router();
+        $router->get(
+            '/nested',
+            static fn(
+                #[
+                    FromQuery,
+                    Fields([
+                        'filter' => ['ids' => [['int']]],
+                    ]),
+                ]
+                Data $query,
+            ): string => 'ok',
+        );
+
+        $this->expectException(GenerationException::class);
+        $this->expectExceptionMessage('query field filter');
+        $this->builder($router)->build();
     }
 
     public function testDeclaredResponsesDescribeStatusHeadersAndLists(): void

@@ -212,7 +212,7 @@ final class DocumentBuilder
             $result['deprecated'] = true;
         }
 
-        $parameters = $this->parameters($input);
+        $parameters = $this->parameters($input, $where);
         if ($parameters !== []) {
             $result['parameters'] = $parameters;
         }
@@ -237,7 +237,7 @@ final class DocumentBuilder
      * @param array<string, mixed> $input
      * @return list<array<string, mixed>>
      */
-    private function parameters(array $input): array
+    private function parameters(array $input, string $where): array
     {
         $parameters = [];
         foreach (self::object($input['parameters'] ?? []) as $name => $schema) {
@@ -252,18 +252,45 @@ final class DocumentBuilder
         if (is_array($query)) {
             $required = array_values(array_filter((array) ($query['required'] ?? []), is_string(...)));
             foreach (self::object($query['properties'] ?? []) as $name => $schema) {
+                $types = (array) ($schema['type'] ?? []);
+                $object = in_array('object', $types, true);
+                $list = in_array('array', $types, true);
+                $supported = self::queryScalar($schema);
+                if ($list && !$object) {
+                    $supported = self::queryScalar($schema['items'] ?? []);
+                } elseif ($object && !$list) {
+                    $supported = isset($schema['properties']);
+                    foreach (self::object($schema['properties'] ?? []) as $property) {
+                        $supported = $supported && self::queryScalar($property);
+                    }
+                }
+                if (!$supported) {
+                    $this->failOrWarn(
+                        "{$where} query field {$name} has a shape without a standard OpenAPI serialization; use scalar fields, lists of scalars or objects with scalar properties.",
+                    );
+                }
                 $parameter = [
-                    'name' => $name,
+                    'name' => $list && !$object ? $name . '[]' : $name,
                     'in' => 'query',
                     'required' => in_array($name, $required, true),
                     'schema' => $this->schema($schema),
-                    'style' => 'form',
+                    'style' => $object ? 'deepObject' : 'form',
                     'explode' => true,
                 ];
                 $parameters[] = $parameter;
             }
         }
         return $parameters;
+    }
+
+    private static function queryScalar(array $schema): bool
+    {
+        $types = (array) ($schema['type'] ?? []);
+        return (
+            $types !== []
+            && array_diff($types, ['string', 'integer', 'number', 'boolean', 'null']) === []
+            && ($schema['format'] ?? null) !== 'binary'
+        );
     }
 
     /**
