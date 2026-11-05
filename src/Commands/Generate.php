@@ -30,22 +30,33 @@ final readonly class Generate implements Command
               --strict                Fail when a route cannot be described (the default)
               --no-strict             Write the document with the generic parts recorded as warnings
 
-            Generation loads the application in its define phase. It starts no
-            server and opens no database or network connection.
+            Generation reads the application's declarations. It starts no
+            server and does not call actions or construct their services.
             TEXT;
     }
 
     public function handle(Input $input, Output $output): int
     {
-        if ($input->option('output') === true || $input->option('output') === '') {
+        try {
+            $given = $input->value('output', example: 'openapi.json');
+        } catch (\InvalidArgumentException $error) {
+            $output->error($error->getMessage());
+            return 1;
+        }
+        if ($given === '') {
             $output->error('The --output option needs a value, such as --output=openapi.json.');
+            return 1;
+        }
+        $path = $given ?? $this->config->get('openapi.output', 'openapi.json');
+        if (!is_string($path) || $path === '' || str_contains($path, "\0") || str_contains($path, '://')) {
+            $output->error('The output must be a local file path; use --output=openapi.json or --output=-.');
             return 1;
         }
         if ($input->flag('strict') && $input->flag('no-strict')) {
             $output->error('Use --strict or --no-strict, not both.');
             return 1;
         }
-        $writesStdout = $input->flag('stdout') || $input->option('output') === '-';
+        $writesStdout = $input->flag('stdout') || $path === '-';
         if ($writesStdout && $input->flag('check')) {
             $output->error('Use --check with a file, once the document has been generated.');
             return 1;
@@ -78,13 +89,18 @@ final readonly class Generate implements Command
             return 0;
         }
 
-        $path = $this->path($input);
+        $path = $this->path($path);
         if ($input->flag('check')) {
             if (!is_file($path)) {
                 $output->error("There is no {$path} to check. Run `php cua openapi:generate` first.");
                 return 1;
             }
-            if (file_get_contents($path) !== $json) {
+            $contents = @file_get_contents($path);
+            if ($contents === false) {
+                $output->error("Could not read {$path}.");
+                return 1;
+            }
+            if ($contents !== $json) {
                 $output->error("{$path} is out of date. Run `php cua openapi:generate` and review the change.");
                 return 1;
             }
@@ -98,22 +114,31 @@ final readonly class Generate implements Command
             return 1;
         }
 
-        $temporary = $path . '.tmp.' . bin2hex(random_bytes(4));
-        if (file_put_contents($temporary, $json) === false || !rename($temporary, $path)) {
-            @unlink($temporary);
+        $temporary = $path . '.tmp.' . bin2hex(random_bytes(8));
+        $stream = @fopen($temporary, 'x+b');
+        if ($stream === false) {
             $output->error("Could not write {$path}.");
             return 1;
+        }
+        try {
+            $written = @fwrite($stream, $json);
+            $closed = @fclose($stream);
+            if ($written !== strlen($json) || !$closed || !@rename($temporary, $path)) {
+                $output->error("Could not write {$path}.");
+                return 1;
+            }
+        } finally {
+            if (is_resource($stream)) {
+                @fclose($stream);
+            }
+            @unlink($temporary);
         }
         $output->line("Wrote {$path}.");
         return 0;
     }
 
-    private function path(Input $input): string
+    private function path(string $path): string
     {
-        $given = $input->option('output');
-        $path = is_string($given) && $given !== ''
-            ? $given
-            : (string) $this->config->get('openapi.output', 'openapi.json');
         if (str_starts_with($path, DIRECTORY_SEPARATOR)) {
             return $path;
         }

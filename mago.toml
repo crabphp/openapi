@@ -26,7 +26,7 @@ no-boolean-flag-parameter = { enabled = false }
 # Named arguments around PHP's built-in predicates would make the schema code
 # denser without changing any public Crab signature.
 literal-named-argument = { enabled = false }
-# The command removes a best-effort temporary file after a failed rename.
+# The command checks filesystem failures by return value and cleans up its temporary file.
 no-error-control-operator = { enabled = false }
 # isset() is the intended check for optional schema keys, where null is absent.
 no-isset = { enabled = false }

@@ -43,7 +43,9 @@ php cua openapi:generate --check
 php cua openapi:generate --stdout
 ```
 
-`--check` regenerates in memory and exits non-zero when the file differs. It starts no server and opens no database or network connection.
+`--check` regenerates in memory and exits non-zero when the file differs. Generation starts no server and does not call actions or construct their services. Loading `app.php` still runs the application's setup and route declarations.
+
+Use `--output=path/to/openapi.json` to choose a local file, or `--output=-` for standard output. The directory must already exist. A complete document replaces the file in one rename; a failed write leaves the previous document and removes the temporary file. `--strict` and `--no-strict` override the configured strict mode.
 
 ## What is inferred
 
@@ -134,7 +136,7 @@ The plugin declares and checks its settings when the document builder is first u
 | `openapi.version` | `1.0.0` | API version |
 | `openapi.description` | `null` | Document description |
 | `openapi.license` | `null` | A license name or OpenAPI license object |
-| `openapi.output` | `openapi.json` | File, relative to `app.path` unless absolute |
+| `openapi.output` | `openapi.json` | Local file, relative to `app.path` unless absolute; `-` writes to standard output |
 | `openapi.strict` | `true` | Fail on response details PHP cannot prove |
 | `openapi.servers` | `app.url` | Server URLs or server objects |
 | `openapi.exclude` | `[]` | Route keys (`GET /path`), names or action classes |

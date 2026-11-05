@@ -10,6 +10,9 @@ use Crab\Console\Output;
 use Crab\OpenApi\Commands\Generate;
 use Crab\OpenApi\DocumentBuilder;
 use Crab\Routing\Router;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 
 final class GenerateTest extends TestCase
@@ -25,7 +28,11 @@ final class GenerateTest extends TestCase
     protected function tearDown(): void
     {
         foreach (glob($this->directory . '/*') ?: [] as $file) {
-            unlink($file);
+            if (is_dir($file)) {
+                rmdir($file);
+            } else {
+                unlink($file);
+            }
         }
         rmdir($this->directory);
     }
@@ -136,6 +143,80 @@ final class GenerateTest extends TestCase
         self::assertSame(1, $this->command()->handle(new Input(['--output=']), $empty));
         self::assertSame('', self::contents($emptyOut));
         self::assertStringContainsString('needs a value', self::contents($emptyError));
+    }
+
+    #[DataProvider('invalidOutputPaths')]
+    public function testInvalidOutputPathsAreRefusedBeforeGeneration(string $path): void
+    {
+        $router = new Router();
+        $router->get('/unknown', static fn(): array => []);
+        $command = new Generate($this->builder($router), $this->config());
+        [$output, $out, $error] = self::outputStreams();
+
+        self::assertSame(1, $command->handle(new Input(['--output=' . $path]), $output));
+        self::assertSame('', self::contents($out));
+        self::assertStringContainsString('local file path', self::contents($error));
+        self::assertSame([], glob($this->directory . '/*'));
+    }
+
+    public static function invalidOutputPaths(): array
+    {
+        return [
+            ["broken\0.json"],
+            ['php://stdout'],
+            ['https://example.test/openapi.json'],
+        ];
+    }
+
+    public function testFailedReplacementCleansUpTheTemporaryFile(): void
+    {
+        $path = $this->directory . '/existing';
+        mkdir($path);
+        [$output, $out, $error] = self::outputStreams();
+
+        self::assertSame(1, $this->command()->handle(new Input(['--output=' . $path]), $output));
+        self::assertSame('', self::contents($out));
+        self::assertStringContainsString('Could not write', self::contents($error));
+        self::assertDirectoryExists($path);
+        self::assertSame([$path], glob($this->directory . '/*'));
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testAShortWritePreservesTheExistingDocumentAndCleansUp(): void
+    {
+        if (!function_exists('posix_setrlimit') || !function_exists('pcntl_signal') || !defined('SIGXFSZ')) {
+            self::markTestSkipped('A file size limit and SIGXFSZ handling are needed to force a short disk write.');
+        }
+        $path = $this->directory . '/openapi.json';
+        file_put_contents($path, "old document\n");
+        [$output, $out, $error] = self::outputStreams();
+        $command = $this->command();
+        $limits = posix_getrlimit();
+        $soft = is_int($limits['soft filesize']) ? $limits['soft filesize'] : POSIX_RLIMIT_INFINITY;
+        $hard = is_int($limits['hard filesize']) ? $limits['hard filesize'] : POSIX_RLIMIT_INFINITY;
+        pcntl_signal(SIGXFSZ, SIG_IGN);
+        self::assertTrue(posix_setrlimit(POSIX_RLIMIT_FSIZE, 64, $hard));
+        $reporting = error_reporting(E_ALL);
+        set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+            if ((error_reporting() & $severity) !== 0) {
+                throw new \ErrorException($message, 0, $severity, $file, $line);
+            }
+            return false;
+        });
+        try {
+            $status = $command->handle(new Input([]), $output);
+        } finally {
+            restore_error_handler();
+            error_reporting($reporting);
+            posix_setrlimit(POSIX_RLIMIT_FSIZE, $soft, $hard);
+        }
+
+        self::assertSame(1, $status);
+        self::assertSame("old document\n", file_get_contents($path));
+        self::assertSame('', self::contents($out));
+        self::assertStringContainsString('Could not write', self::contents($error));
+        self::assertSame([$path], glob($this->directory . '/*'));
     }
 
     private function command(): Generate
