@@ -8,6 +8,7 @@ Crab OpenAPI follows [semantic versioning](https://semver.org). Before 1.0, a mi
 - Keep input nullability, defaults and rules at each use of a shared class or enum. Preserve empty schema objects, response alternatives and overlapping property unions, and resolve inherited property types in their declaring class. Enums with custom JSON serialization need an explicit schema.
 - Describe query lists with bracketed names and query objects with `deepObject`. Strict generation now refuses nested query collections and untyped query arrays whose serialization is not portable in OpenAPI.
 - Ignore unrelated action attributes and skip hidden routes before reading their response declarations.
+- Read class metadata and inherited `static` return types from the action class registered on the route, so inherited handlers keep their security and hidden declarations.
 - Preserve the previous document and remove temporary files after failed writes. Validate output paths before generation and use the framework's option-value parser.
 - Reject conflicting path templates and license fields. Keep empty OAuth scopes and server variables as JSON objects, and do not invent error bodies for middleware statuses below `400`. Informational responses cannot declare content.
 

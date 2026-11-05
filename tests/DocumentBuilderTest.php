@@ -16,6 +16,8 @@ use Crab\OpenApi\Tests\Fixtures\ApiKeyAuth;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\OpenApi\Tests\Fixtures\CreateThingAction;
 use Crab\OpenApi\Tests\Fixtures\HiddenAction;
+use Crab\OpenApi\Tests\Fixtures\HiddenInheritedAction;
+use Crab\OpenApi\Tests\Fixtures\InheritedAction;
 use Crab\OpenApi\Tests\Fixtures\InheritedView;
 use Crab\OpenApi\Tests\Fixtures\Kind;
 use Crab\OpenApi\Tests\Fixtures\ListThingsAction;
@@ -648,6 +650,36 @@ final class DocumentBuilderTest extends TestCase
             $schemas['Crab.OpenApi.Tests.Fixtures.InheritedView']['properties']['next'],
         );
         self::assertSame(['next'], array_keys($schemas['Crab.OpenApi.Tests.Fixtures.ParentView']['properties']));
+    }
+
+    public function testAnInheritedActionUsesTheRegisteredClassMetadata(): void
+    {
+        $router = new Router();
+        $router->get('/inherited', InheritedAction::class);
+        $router->get('/hidden', HiddenInheritedAction::class);
+
+        $document = $this->document($router, ['security' => ['bearer' => ['type' => 'http', 'scheme' => 'bearer']]]);
+
+        self::assertSame('An inherited action.', $document['paths']['/inherited']['get']['summary']);
+        self::assertSame([['bearer' => []]], $document['paths']['/inherited']['get']['security']);
+        self::assertArrayNotHasKey('/hidden', $document['paths']);
+    }
+
+    public function testAnInheritedStaticReturnTypeUsesTheRegisteredClass(): void
+    {
+        $router = new Router();
+        $router->get('/inherited', InheritedAction::class);
+
+        $document = $this->document($router, ['security' => ['bearer' => ['type' => 'http', 'scheme' => 'bearer']]]);
+
+        self::assertSame(
+            ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.InheritedAction'],
+            $document['paths']['/inherited']['get']['responses']['200']['content']['application/json']['schema'],
+        );
+        self::assertArrayHasKey(
+            'label',
+            $document['components']['schemas']['Crab.OpenApi.Tests.Fixtures.InheritedAction']['properties'],
+        );
     }
 
     public function testAnEnumWithCustomJsonSerializationNeedsAnExplicitSchema(): void

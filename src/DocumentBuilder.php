@@ -169,13 +169,12 @@ final class DocumentBuilder
             return $operation;
         }
 
-        if ($this->hidden($signature)) {
+        $actionClass = $this->actionClass($route, $signature);
+        if ($this->hidden($signature, $actionClass)) {
             return null;
         }
         $methodAttributes = $this->attributes($signature);
-        $classAttributes = $signature instanceof \ReflectionMethod
-            ? $this->attributes($signature->getDeclaringClass())
-            : [];
+        $classAttributes = $actionClass === null ? [] : $this->attributes($actionClass);
         $methodOperation = $this->first($methodAttributes, Operation::class);
         $classOperation = $this->first($classAttributes, Operation::class);
         $operation = $methodOperation === null
@@ -232,7 +231,7 @@ final class DocumentBuilder
         }
 
         $result['responses'] = $responses === []
-            ? $this->inferredResponses($signature, $where)
+            ? $this->inferredResponses($signature, $where, $actionClass)
             : $this->declaredResponses($responses, $where);
         $this->addErrors($result['responses'], $input, $route, $security);
         return $result;
@@ -362,8 +361,11 @@ final class DocumentBuilder
     /**
      * @return array<string, array<string, mixed>>
      */
-    private function inferredResponses(\ReflectionFunctionAbstract $signature, string $where): array
-    {
+    private function inferredResponses(
+        \ReflectionFunctionAbstract $signature,
+        string $where,
+        ?\ReflectionClass $actionClass,
+    ): array {
         $type = $signature->getReturnType();
         if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
             $this->failOrWarn(
@@ -403,7 +405,7 @@ final class DocumentBuilder
                 ],
             ], $type);
         }
-        $declaringClass = $signature instanceof \ReflectionMethod ? $signature->getDeclaringClass()->getName() : null;
+        $declaringClass = $this->returnTypeClass($signature, $actionClass);
         $schema = $this->types->schema($type, $where, $declaringClass, nullable: false);
         if ($schema === null) {
             return ['204' => ['description' => 'No Content']];
@@ -1081,15 +1083,30 @@ final class DocumentBuilder
         return false;
     }
 
-    private function hidden(\ReflectionFunctionAbstract $signature): bool
+    private function actionClass(RouteInfo $route, \ReflectionFunctionAbstract $signature): ?\ReflectionClass
+    {
+        if (!$signature instanceof \ReflectionMethod) {
+            return null;
+        }
+        $class = explode('::', $route->action, 2)[0];
+        return class_exists($class) ? new \ReflectionClass($class) : $signature->getDeclaringClass();
+    }
+
+    private function returnTypeClass(\ReflectionFunctionAbstract $signature, ?\ReflectionClass $actionClass): ?string
+    {
+        $type = $signature->getReturnType();
+        if ($type instanceof \ReflectionNamedType && $type->getName() === 'static' && $actionClass !== null) {
+            return $actionClass->getName();
+        }
+        return $signature instanceof \ReflectionMethod ? $signature->getDeclaringClass()->getName() : null;
+    }
+
+    private function hidden(\ReflectionFunctionAbstract $signature, ?\ReflectionClass $actionClass): bool
     {
         if ($this->attributes($signature, [Hidden::class]) !== []) {
             return true;
         }
-        return (
-            $signature instanceof \ReflectionMethod
-            && $this->attributes($signature->getDeclaringClass(), [Hidden::class]) !== []
-        );
+        return $actionClass !== null && $this->attributes($actionClass, [Hidden::class]) !== [];
     }
 
     /**
@@ -1188,18 +1205,22 @@ final class DocumentBuilder
                 continue;
             }
             $signature = $this->router->signature($route);
-            if ($signature === null || $this->hidden($signature)) {
+            if ($signature === null) {
+                continue;
+            }
+            $actionClass = $this->actionClass($route, $signature);
+            if ($this->hidden($signature, $actionClass)) {
                 continue;
             }
             $input = $this->router->input($route);
             if (is_array($input)) {
                 $this->collectSchemaClasses($input, $inputs);
             }
-            $declaring = $signature instanceof \ReflectionMethod ? $signature->getDeclaringClass()->getName() : null;
+            $declaring = $this->returnTypeClass($signature, $actionClass);
             $this->collectOutputType($signature->getReturnType(), $declaring, $outputs, []);
             $this->collectResponseAttributeClasses($signature, $outputs);
-            if ($signature instanceof \ReflectionMethod) {
-                $this->collectResponseAttributeClasses($signature->getDeclaringClass(), $outputs);
+            if ($actionClass !== null) {
+                $this->collectResponseAttributeClasses($actionClass, $outputs);
             }
         }
         return array_values(array_intersect(array_keys($inputs), array_keys($outputs)));

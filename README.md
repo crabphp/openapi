@@ -96,6 +96,8 @@ final readonly class PlaceOrder
 
 The generator constructs only this package's attributes. Other action metadata is ignored, and a `#[Hidden]` action is excluded before its response declarations are read.
 
+Class attributes come from the class registered on the route, even when it inherits its action method. An inherited method returning `static` is described as that registered class.
+
 `body` accepts:
 
 - one class name for a JSON object;
