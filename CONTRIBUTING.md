@@ -1,9 +1,14 @@
 # Contributing
 
-Setup, tests, formatting, linting and conventions are the same as the framework's: see [crabphp/framework's CONTRIBUTING.md](https://github.com/crabphp/framework/blob/main/CONTRIBUTING.md). Before a pull request, run here:
+Setup, formatting, linting and conventions follow [crabphp/framework's CONTRIBUTING.md](https://github.com/crabphp/framework/blob/main/CONTRIBUTING.md). Use PHP 8.4 or later, put a framework 0.6.x checkout at `../framework`, and run `composer install` here. The path repository uses that checkout; no external services are needed by this package's tests.
+
+Before a pull request, run here:
 
 ```sh
+composer validate --strict
 composer format:check
 composer lint
-vendor/bin/phpunit
+composer test
 ```
+
+CI runs the suite on Linux and macOS against framework `v0.6.1` and `main`. The short-write regression test uses `pcntl` and `posix` in a separate PHP process; it is skipped when those extensions are absent.

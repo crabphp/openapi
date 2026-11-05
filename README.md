@@ -1,10 +1,12 @@
 # Crab OpenAPI
 
-Generate an OpenAPI 3.1 document from a [Crab](../framework) application's route table, validation schemas and action signatures.
+Generate an OpenAPI 3.1 document from a [Crab](https://github.com/crabphp/framework) application's route table, validation schemas and action signatures.
 
 The package runs at build time. It adds a console command and configuration defaults; it adds no middleware and no work to a request.
 
 ## Installation
+
+Requires PHP 8.4 or later and `crabphp/framework` 0.6.x.
 
 ```sh
 composer require crabphp/openapi
@@ -13,6 +15,8 @@ composer require crabphp/openapi
 Register the plugin in `app.php`:
 
 ```php
+use App\Setup;
+use Crab\App;
 use Crab\OpenApi\OpenApiPlugin;
 
 return App::configure(__DIR__)
@@ -199,4 +203,4 @@ composer format:check
 composer lint
 ```
 
-The `sample/` application in this workspace exercises the package against a real shop API.
+For development, Composer uses the framework checkout at `../framework`. CI runs these checks on Linux and macOS against framework `v0.6.1` and `main`. The [sample application](https://github.com/crabphp/sample) exercises the package against a shop API.

@@ -14,8 +14,14 @@ concurrency:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    name: PHP 8.4 / ${{ matrix.os }} / framework ${{ matrix.framework }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        framework: [v0.6.1, main]
     defaults:
       run:
         working-directory: openapi
@@ -23,10 +29,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: openapi
-      # Tested against the framework's main, which composer.json reads from ../framework; a release requires ^0.6 of it.
+      # The path repository exercises both the release and current development API.
       - uses: actions/checkout@v4
         with:
           repository: crabphp/framework
+          ref: ${{ matrix.framework }}
           path: framework
       - uses: shivammathur/setup-php@v2
         with:
@@ -34,6 +41,7 @@ jobs:
           extensions: mbstring, pcntl, posix, sockets, pdo_sqlite
           coverage: none
       - run: composer install --no-interaction --no-progress
+      - run: composer validate --strict
       - run: composer format:check
       - run: composer lint
-      - run: vendor/bin/phpunit
+      - run: composer test
