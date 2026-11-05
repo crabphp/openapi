@@ -63,9 +63,9 @@ Responses are inferred only where Crab's runtime makes the result unambiguous:
 | typed JSON scalar/class | `200 application/json` |
 | nullable typed value | both the typed `200` and `204` |
 
-A DTO's public properties become its JSON Schema. A backed enum becomes an enum and a date becomes an ISO `date-time`. Recursive classes become component `$ref`s.
+A DTO's public properties become its JSON Schema. Property unions accept any of their member types, including overlapping types such as `int|float`. Inherited properties resolve `self` and `parent` in the class that declared them. A backed enum becomes an enum and a date becomes an ISO `date-time`. Recursive classes become component `$ref`s.
 
-The generator records a warning and, in strict mode, stops when the signature cannot prove the response: a PSR-7 `ResponseInterface`, a bare `array`, `mixed`, `never`, a stream's event shape, `JsonSerializable`, or a union with incompatible outcomes. Declare those responses explicitly.
+The generator records a warning and, in strict mode, stops when the signature cannot prove the response: a PSR-7 `ResponseInterface`, a bare `array`, `mixed`, `never`, a stream's event shape, `JsonSerializable` (including an enum that implements it), or a union or intersection return type. Declare those responses explicitly.
 
 ## Declaring responses
 

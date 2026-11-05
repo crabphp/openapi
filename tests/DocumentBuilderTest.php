@@ -15,15 +15,18 @@ use Crab\OpenApi\Tests\Fixtures\ApiKeyAuth;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\OpenApi\Tests\Fixtures\CreateThingAction;
 use Crab\OpenApi\Tests\Fixtures\HiddenAction;
+use Crab\OpenApi\Tests\Fixtures\InheritedView;
 use Crab\OpenApi\Tests\Fixtures\Kind;
 use Crab\OpenApi\Tests\Fixtures\ListThingsAction;
 use Crab\OpenApi\Tests\Fixtures\NullableInput;
 use Crab\OpenApi\Tests\Fixtures\NullableKindView;
+use Crab\OpenApi\Tests\Fixtures\NumberView;
 use Crab\OpenApi\Tests\Fixtures\OperationDefaultsAction;
 use Crab\OpenApi\Tests\Fixtures\OptionalBody;
 use Crab\OpenApi\Tests\Fixtures\OptionalUser;
 use Crab\OpenApi\Tests\Fixtures\RecursiveNode;
 use Crab\OpenApi\Tests\Fixtures\SecurityAction;
+use Crab\OpenApi\Tests\Fixtures\SerializedKind;
 use Crab\OpenApi\Tests\Fixtures\SharedThing;
 use Crab\OpenApi\Tests\Fixtures\Thing;
 use Crab\OpenApi\Tests\Fixtures\UninitializedView;
@@ -525,6 +528,41 @@ final class DocumentBuilderTest extends TestCase
         $schema = $this->document($router)['components']['schemas']['Crab.OpenApi.Tests.Fixtures.UninitializedView'];
 
         self::assertSame(['note'], $schema['required']);
+    }
+
+    public function testOverlappingPropertyTypesAcceptAnInteger(): void
+    {
+        $router = new Router();
+        $router->get('/number', static fn(): NumberView => new NumberView(1));
+
+        $schema = $this->document($router)['components']['schemas']['Crab.OpenApi.Tests.Fixtures.NumberView'];
+
+        self::assertSame(['anyOf' => [['type' => 'integer'], ['type' => 'number']]], $schema['properties']['value']);
+    }
+
+    public function testInheritedPropertyTypesUseTheirDeclaringClass(): void
+    {
+        $router = new Router();
+        $router->get('/inherited', static fn(): InheritedView => new InheritedView());
+
+        $schemas = $this->document($router)['components']['schemas'];
+        $parent = ['$ref' => '#/components/schemas/Crab.OpenApi.Tests.Fixtures.ParentView'];
+
+        self::assertSame(
+            ['oneOf' => [$parent, ['type' => 'null']]],
+            $schemas['Crab.OpenApi.Tests.Fixtures.InheritedView']['properties']['next'],
+        );
+        self::assertSame(['next'], array_keys($schemas['Crab.OpenApi.Tests.Fixtures.ParentView']['properties']));
+    }
+
+    public function testAnEnumWithCustomJsonSerializationNeedsAnExplicitSchema(): void
+    {
+        $router = new Router();
+        $router->get('/serialized-enum', static fn(): SerializedKind => SerializedKind::Simple);
+
+        $this->expectException(GenerationException::class);
+        $this->expectExceptionMessage('JsonSerializable shape cannot be inferred');
+        $this->builder($router)->build();
     }
 
     public function testBodiesOnNoContentStatusesFailStrictGeneration(): void

@@ -55,7 +55,9 @@ final class TypeSchema
             if ($hasNull && $nullable) {
                 $parts[] = ['type' => 'null'];
             }
-            return count($parts) === 1 ? $parts[0] : ['oneOf' => $parts];
+            // PHP unions allow a value matching more than one member. JSON
+            // Schema's oneOf would reject an integer in int|float, for example.
+            return count($parts) === 1 ? $parts[0] : ['anyOf' => $parts];
         }
         if (!$type instanceof \ReflectionNamedType) {
             ($this->warn)("{$where} has a return type that cannot be described; its body is generic.");
@@ -94,18 +96,18 @@ final class TypeSchema
         if (is_a($class, \DateTimeInterface::class, true)) {
             return ['type' => 'string', 'format' => 'date-time'];
         }
+        if (is_a($class, \JsonSerializable::class, true)) {
+            ($this->warn)(
+                "{$where} returns {$class}, whose JsonSerializable shape cannot be inferred; its body is generic.",
+            );
+            return new \stdClass();
+        }
         if (enum_exists($class) && is_subclass_of($class, \BackedEnum::class)) {
             $values = array_map(static fn(\BackedEnum $case): int|string => $case->value, $class::cases());
             return [
                 'type' => is_int($values[0] ?? '') ? 'integer' : 'string',
                 'enum' => $values,
             ];
-        }
-        if (is_a($class, \JsonSerializable::class, true)) {
-            ($this->warn)(
-                "{$where} returns {$class}, whose JsonSerializable shape cannot be inferred; its body is generic.",
-            );
-            return new \stdClass();
         }
         if (is_a($class, ResponseInterface::class, true)) {
             ($this->warn)("{$where} returns a PSR-7 response; declare its status and body with #[Response].");
@@ -190,7 +192,7 @@ final class TypeSchema
             $properties[$property->getName()] = $this->schema(
                 $property->getType(),
                 "{$where} property {$class}::\${$property->getName()}",
-                $class,
+                $property->getDeclaringClass()->getName(),
             ) ?? new \stdClass();
             // Json_encode() omits a public property that has never been
             // initialized. Promoted properties are initialized by PHP before

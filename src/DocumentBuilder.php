@@ -1259,7 +1259,7 @@ final class DocumentBuilder
             if ($property->isStatic()) {
                 continue;
             }
-            $this->collectOutputType($property->getType(), $class, $classes, $seen);
+            $this->collectOutputType($property->getType(), $property->getDeclaringClass()->getName(), $classes, $seen);
         }
     }
 
