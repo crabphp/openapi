@@ -81,10 +81,12 @@ final class OpenApiPlugin implements Plugin
         );
 
         $container->singleton(DocumentBuilder::class, static function (Container $container): DocumentBuilder {
+            $config = $container->get(Config::class);
+            $config->check('openapi');
             $middleware = $container->has(MiddlewareStack::class) ? $container->get(MiddlewareStack::class) : null;
             return new DocumentBuilder(
                 $container->get(Router::class),
-                $container->get(Config::class),
+                $config,
                 $container->has(ErrorRenderer::class),
                 $middleware instanceof MiddlewareStack ? $middleware->layers() : [],
             );

@@ -124,6 +124,8 @@ For streams and downloads, set `contentType` and describe the text or binary sch
 
 ## Configuration
 
+The plugin declares and checks its settings when the document builder is first used, including from the console. Unknown settings and values of the wrong type are refused even with `--no-strict`.
+
 | Setting | Default | |
 | --- | --- | --- |
 | `openapi.title` | `app.name`, then `API` | Document title |

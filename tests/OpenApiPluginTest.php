@@ -4,18 +4,23 @@ declare(strict_types=1);
 
 namespace Crab\OpenApi\Tests;
 
+use Crab\App;
 use Crab\Config\Config;
 use Crab\Console\Console;
 use Crab\Container\Container;
 use Crab\Contracts\Config\Config as ConfigContract;
+use Crab\Contracts\Config\InvalidSettings;
 use Crab\Contracts\Console\Console as ConsoleContract;
+use Crab\Contracts\Container\Container as ContainerContract;
 use Crab\Contracts\Http\MiddlewareStack as MiddlewareStackContract;
+use Crab\Contracts\Plugin;
 use Crab\Contracts\Routing\Router as RouterContract;
 use Crab\Http\MiddlewareStack;
 use Crab\OpenApi\DocumentBuilder;
 use Crab\OpenApi\OpenApiPlugin;
 use Crab\OpenApi\Tests\Fixtures\BearerAuth;
 use Crab\Routing\Router;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class OpenApiPluginTest extends TestCase
@@ -80,5 +85,61 @@ final class OpenApiPluginTest extends TestCase
 
         $operation = $container->get(DocumentBuilder::class)->build(false)->document['paths']['/global']['get'];
         self::assertSame([['bearer' => []]], $operation['security']);
+    }
+
+    #[DataProvider('invalidSettings')]
+    public function testInvalidSettingsAreRefusedWhenTheBuilderIsMade(string $key, mixed $value): void
+    {
+        $container = new Container();
+        $container->instance(ConfigContract::class, new Config(['openapi' => [$key => $value]]));
+        $container->instance(RouterContract::class, new Router());
+        new OpenApiPlugin()->register($container);
+
+        $this->expectException(InvalidSettings::class);
+        $this->expectExceptionMessage('openapi.' . $key);
+        $container->get(DocumentBuilder::class);
+    }
+
+    public static function invalidSettings(): array
+    {
+        return [
+            ['title', 123],
+            ['version', ''],
+            ['description', false],
+            ['license', false],
+            ['output', ''],
+            ['strict', 'false'],
+            ['exclude', [false]],
+            ['servers', [false]],
+            ['security', 'bearer'],
+            ['middleware', [BearerAuth::class => ['unknown' => true]]],
+            ['error_schema', false],
+            ['strcit', false],
+        ];
+    }
+
+    public function testSetupCanExtendTheApplicationAfterThePluginRegisters(): void
+    {
+        $setup = new class implements Plugin {
+            public bool $sawCommand = false;
+
+            public function register(ContainerContract $container): void
+            {
+                $this->sawCommand = $container->get(ConsoleContract::class)->has('openapi:generate');
+                $container->get(RouterContract::class)->get(
+                    '/setup',
+                    static fn(): string => throw new \LogicException(),
+                );
+            }
+        };
+        $app = App::configure()->withSetup($setup)->withPlugins([OpenApiPlugin::class], only: [])->create();
+
+        $document = $app->container->get(DocumentBuilder::class)->build()->document;
+
+        self::assertTrue($setup->sawCommand);
+        self::assertSame(
+            'text/plain',
+            array_key_first($document['paths']['/setup']['get']['responses']['200']['content']),
+        );
     }
 }
