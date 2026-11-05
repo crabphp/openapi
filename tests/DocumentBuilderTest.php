@@ -30,6 +30,7 @@ use Crab\OpenApi\Tests\Fixtures\SerializedKind;
 use Crab\OpenApi\Tests\Fixtures\SharedThing;
 use Crab\OpenApi\Tests\Fixtures\Thing;
 use Crab\OpenApi\Tests\Fixtures\UninitializedView;
+use Crab\OpenApi\Tests\Fixtures\UnrelatedMetadata;
 use Crab\OpenApi\Tests\Fixtures\UploadThing;
 use Crab\Routing\FromQuery;
 use Crab\Routing\Router;
@@ -642,6 +643,28 @@ final class DocumentBuilderTest extends TestCase
         $document = $this->document($router, ['exclude' => ['GET /excluded']]);
 
         self::assertSame(['/visible'], array_keys($document['paths']));
+    }
+
+    public function testUnrelatedAttributesAreNeverConstructed(): void
+    {
+        $router = new Router();
+        $router->get('/metadata', #[UnrelatedMetadata, \DocumentationOnlyAttribute] static fn(): string => 'ok');
+
+        $result = $this->builder($router)->build();
+
+        self::assertSame([], $result->warnings);
+        self::assertArrayHasKey('/metadata', $result->document['paths']);
+    }
+
+    public function testHiddenRoutesDoNotValidateResponseAttributes(): void
+    {
+        $router = new Router();
+        $router->get('/hidden', #[Hidden, Response(99)] static fn(): string => 'hidden');
+
+        $result = $this->builder($router)->build();
+
+        self::assertSame([], $result->warnings);
+        self::assertInstanceOf(\stdClass::class, $result->document['paths']);
     }
 
     public function testOutputIsDeterministicAcrossBuilds(): void

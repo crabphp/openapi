@@ -164,13 +164,13 @@ final class DocumentBuilder
             return $operation;
         }
 
+        if ($this->hidden($signature)) {
+            return null;
+        }
         $methodAttributes = $this->attributes($signature);
         $classAttributes = $signature instanceof \ReflectionMethod
             ? $this->attributes($signature->getDeclaringClass())
             : [];
-        if ($this->hidden($signature)) {
-            return null;
-        }
         $methodOperation = $this->first($methodAttributes, Operation::class);
         $classOperation = $this->first($classAttributes, Operation::class);
         $operation = $methodOperation === null
@@ -1040,11 +1040,13 @@ final class DocumentBuilder
     /**
      * @return list<object>
      */
-    private function attributes(\ReflectionFunctionAbstract|\ReflectionClass $reflector, ?array $only = null): array
-    {
+    private function attributes(
+        \ReflectionFunctionAbstract|\ReflectionClass $reflector,
+        array $only = [Hidden::class, Operation::class, ResponseAttribute::class, Security::class],
+    ): array {
         $attributes = [];
         foreach ($reflector->getAttributes() as $attribute) {
-            if ($only !== null && !in_array($attribute->getName(), $only, true)) {
+            if (!in_array($attribute->getName(), $only, true)) {
                 continue;
             }
             try {
@@ -1130,13 +1132,13 @@ final class DocumentBuilder
             if ($route->method === 'WS' || $this->excluded($route)) {
                 continue;
             }
+            $signature = $this->router->signature($route);
+            if ($signature === null || $this->hidden($signature)) {
+                continue;
+            }
             $input = $this->router->input($route);
             if (is_array($input)) {
                 $this->collectSchemaClasses($input, $inputs);
-            }
-            $signature = $this->router->signature($route);
-            if ($signature === null) {
-                continue;
             }
             $declaring = $signature instanceof \ReflectionMethod ? $signature->getDeclaringClass()->getName() : null;
             $this->collectOutputType($signature->getReturnType(), $declaring, $outputs, []);

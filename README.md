@@ -86,6 +86,8 @@ final readonly class PlaceOrder
 }
 ```
 
+The generator constructs only this package's attributes. Other action metadata is ignored, and a `#[Hidden]` action is excluded before its response declarations are read.
+
 `body` accepts:
 
 - one class name for a JSON object;
