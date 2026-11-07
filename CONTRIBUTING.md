@@ -11,4 +11,4 @@ composer lint
 composer test
 ```
 
-CI runs the suite on Linux and macOS against framework `v0.6.1` and `main`. The short-write regression test uses `pcntl` and `posix` in a separate PHP process; it is skipped when those extensions are absent.
+CI runs the suite on Linux and macOS against framework `v0.6.3` and `main`. The short-write regression test uses `pcntl` and `posix` in a separate PHP process; it is skipped when those extensions are absent.

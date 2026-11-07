@@ -2,7 +2,7 @@
 
 Crab OpenAPI follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
-## Unreleased
+## 0.1.1 — 2026-11-07
 
 - Check the plugin's settings before the document builder is made, including from console commands. CI covers framework `v0.6.1` and `main` on Linux and macOS; the package requires `^0.6`.
 - Keep input nullability, defaults and rules at each use of a shared class or enum. Preserve empty schema objects, response alternatives and overlapping property unions, and resolve inherited property types in their declaring class. Enums with custom JSON serialization need an explicit schema.
