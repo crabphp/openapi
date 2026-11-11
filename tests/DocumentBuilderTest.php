@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Crab\OpenApi\Tests;
 
 use Crab\Config\Config;
+use Crab\Contracts\Http\Handler;
+use Crab\Contracts\Http\Request as RequestContract;
 use Crab\Http\Request;
 use Crab\OpenApi\Attributes\Hidden;
 use Crab\OpenApi\Attributes\Operation;
@@ -43,8 +45,6 @@ use Crab\Validation\ListOf;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 
 final class DocumentBuilderTest extends TestCase
 {
@@ -332,8 +332,8 @@ final class DocumentBuilderTest extends TestCase
 
     public function testMiddlewareEffectsAreKeptForUntypedHandlers(): void
     {
-        $handler = new class implements RequestHandlerInterface {
-            public function handle(ServerRequestInterface $request): ResponseInterface
+        $handler = new class implements Handler {
+            public function handle(RequestContract $request): ResponseInterface
             {
                 throw new \LogicException('Not called.');
             }
@@ -895,8 +895,8 @@ final class DocumentBuilderTest extends TestCase
 
     public function testUnknownPsrHandlersAreHonestAndHaveNoInventedInputOrBody(): void
     {
-        $handler = new class implements RequestHandlerInterface {
-            public function handle(ServerRequestInterface $request): ResponseInterface
+        $handler = new class implements Handler {
+            public function handle(RequestContract $request): ResponseInterface
             {
                 throw new \LogicException('Not called.');
             }
@@ -911,8 +911,8 @@ final class DocumentBuilderTest extends TestCase
 
     public function testNonStrictPsrHandlerOutputIsMarkedGeneric(): void
     {
-        $handler = new class implements RequestHandlerInterface {
-            public function handle(ServerRequestInterface $request): ResponseInterface
+        $handler = new class implements Handler {
+            public function handle(RequestContract $request): ResponseInterface
             {
                 throw new \LogicException('Not called.');
             }

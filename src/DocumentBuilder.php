@@ -152,7 +152,7 @@ final class DocumentBuilder
         $signature = $this->router->signature($route);
         $input = $this->router->input($route);
         if ($signature === null || $input === null) {
-            $this->failOrWarn("{$where} is handled by a PSR-15 handler; its request and response are not described.");
+            $this->failOrWarn("{$where} is handled by a Handler of its own; its request and response are not described.");
             $security = $this->security($route, []);
             $responses = [
                 '200' => ['description' => 'OK', 'x-crab-untyped-body' => true],

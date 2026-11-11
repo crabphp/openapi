@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Crab\OpenApi\Tests\Fixtures;
 
+use Crab\Contracts\Http\Handler;
+use Crab\Contracts\Http\Middleware;
+use Crab\Contracts\Http\Request;
 use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\MiddlewareInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 
-final class BearerAuth implements MiddlewareInterface
+final class BearerAuth implements Middleware
 {
-    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
+    public function handle(Request $request, Handler $next): ResponseInterface
     {
-        return $handler->handle($request);
+        return $next->handle($request);
     }
 }
