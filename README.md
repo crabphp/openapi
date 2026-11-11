@@ -6,7 +6,7 @@ The package runs at build time. It adds a console command and configuration defa
 
 ## Installation
 
-Requires PHP 8.4 or later and `crabphp/framework` 0.6.x.
+Requires PHP 8.4 or later and `crabphp/framework` 0.7.x.
 
 ```sh
 composer require crabphp/openapi
@@ -205,4 +205,4 @@ composer format:check
 composer lint
 ```
 
-For development, Composer uses the framework checkout at `../framework`. CI runs these checks on Linux and macOS against framework `v0.6.1` and `main`. The [sample application](https://github.com/crabphp/sample) exercises the package against a shop API.
+For development, Composer uses the framework checkout at `../framework`. CI runs these checks on Linux and macOS against framework `v0.7.0` and `main`. The [sample application](https://github.com/crabphp/sample) exercises the package against a shop API.
