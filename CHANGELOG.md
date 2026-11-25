@@ -2,6 +2,10 @@
 
 Crab OpenAPI follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
+## Unreleased
+
+- Requires `crabphp/framework` ^0.7.1: middleware is Crab's own `handle(Request $request, Handler $next)`, which 0.7.0 does not have. CI covers PHP 8.4, 8.5 and 8.6.
+
 ## 0.2.0 — 2026-11-12
 
 - Requires `crabphp/framework` ^0.7, for its 0.7.0 release.
